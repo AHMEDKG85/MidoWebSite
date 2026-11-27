@@ -22,8 +22,13 @@ export default defineConfig(() => {
           const distDir = path.resolve(__dirname, 'dist');
           const srcAssets = path.resolve(__dirname, 'src/assets');
           const distAssets = path.resolve(distDir, 'src/assets');
+          const privateReferenceAssets = path.resolve(distDir, 'assets/aistudio');
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
+          }
+          // AI Studio conversation screenshots are private project references, never site assets.
+          if (fs.existsSync(privateReferenceAssets)) {
+            fs.rmSync(privateReferenceAssets, {recursive: true, force: true});
           }
         },
       },

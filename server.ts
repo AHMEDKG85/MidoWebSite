@@ -155,7 +155,6 @@ const MODEL_UPLOAD_DIR = path.resolve(UPLOAD_ROOT, 'models');
 fs.mkdirSync(MODEL_UPLOAD_DIR, { recursive: true });
 
 const uploadCatalog = makeMulterUploader(CATALOG_UPLOAD_DIR);
-const uploadRx = makeMulterUploader(RX_UPLOAD_DIR);
 
 const uploadModel = multer({
   storage: multer.diskStorage({
@@ -225,6 +224,8 @@ const eyeRxSchema = z.object({
 });
 
 const orderInputSchema = z.object({
+  orderCode: z.string().trim().min(8).max(40).regex(/^MDO-[A-Z0-9-]+$/),
+  invoiceNumber: z.string().trim().min(8).max(40).regex(/^INV-[A-Z0-9-]+$/),
   customerName: z.string().trim().min(2).max(120),
   customerPhone: z.string().trim().min(7).max(30),
   customerAddress: z.string().trim().min(4).max(400),
@@ -234,23 +235,15 @@ const orderInputSchema = z.object({
       z.object({
         productId: z.number().int().positive(),
         productSlug: z.string().trim().max(160).optional(),
-        productName: z.string().trim().max(200).optional(),
-        category: categorySchema.optional(),
         variantId: z.number().int().positive(),
         colorName: z.string().trim().max(100).optional(),
-        colorHex: z.string().trim().max(20).optional(),
-        frameShape: z.string().trim().max(60).optional(),
-        imageUrl: z.string().trim().max(450000).optional(),
-        frameImageUrl: z.string().trim().max(450000).optional(),
-        framePrice: z.number().min(0).max(500000).optional(),
         lensId: z.number().int().positive().nullable().optional(),
         lensName: z.string().trim().max(160).nullable().optional(),
-        lensPrice: z.number().min(0).max(100000).optional(),
-        orderType: z.enum(['standard', 'preorder']).optional(),
         quantity: z.number().int().min(1).max(20),
       }),
     )
-    .min(1),
+    .min(1)
+    .max(20),
   prescription: z
     .object({
       mode: z.enum(['manual', 'upload', 'both']),
@@ -258,8 +251,6 @@ const orderInputSchema = z.object({
       os: eyeRxSchema,
       ipd: z.string().trim().max(12).optional().default(''),
       imageUrl: z.string().trim().max(450000).optional().default(''),
-      absoluteImageUrl: z.string().trim().max(450000).optional().default(''),
-      photoUrl: z.string().trim().max(450000).optional().default(''),
     })
     .nullable()
     .optional(),
@@ -282,7 +273,7 @@ const storeSettingsSchema = z.object({
   phones: z.array(z.string().trim().min(5).max(30)).min(1),
   whatsapp: z.string().trim().max(30),
   workingHours: z.string().trim().min(3).max(200),
-  externalAdminUrl: z.string().trim().max(300).optional().default('https://mido-optics-servies.vercel.app'),
+  externalAdminUrl: z.string().trim().max(300).optional().default(''),
 });
 
 function slugifyAscii(input: string): string {
@@ -341,6 +332,19 @@ function inlineOrAbsoluteAssetUrl(relOrAbs: string, reqHost?: string): string {
   }
   if (clean.startsWith('/uploads/')) {
     const relUploadPath = clean.slice('/uploads/'.length);
+    if (relUploadPath.startsWith('prescriptions/')) {
+      const fullRxPath = path.resolve(UPLOAD_ROOT, relUploadPath);
+      if (!fullRxPath.startsWith(RX_UPLOAD_DIR + path.sep) || !fs.existsSync(fullRxPath)) return '';
+      try {
+        const stat = fs.statSync(fullRxPath);
+        if (stat.size > 350 * 1024) return '';
+        const ext = path.extname(fullRxPath).toLowerCase();
+        const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+        return `data:${mime};base64,${fs.readFileSync(fullRxPath).toString('base64')}`;
+      } catch {
+        return '';
+      }
+    }
     const fullDiskPath = path.resolve(UPLOAD_ROOT, relUploadPath);
     if (fullDiskPath.startsWith(UPLOAD_ROOT + path.sep) && fs.existsSync(fullDiskPath)) {
       try {
@@ -412,6 +416,7 @@ async function dispatchOrderToExternalAdmin(
   if (!safeUrl) return 'failed';
 
   const secret = (process.env.EXTERNAL_SYNC_SECRET || '').trim();
+  if (!secret) return 'not_configured';
   const enriched = enrichOrderForExternal(order, reqHost);
   const payload = {
     event: 'mido.order.created',
@@ -479,13 +484,12 @@ async function dispatchOrderToExternalAdmin(
   const bodyStr = JSON.stringify(payload);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'Idempotency-Key': enriched.orderCode,
   };
-  if (secret) {
-    headers['X-Mido-Signature'] = crypto
-      .createHmac('sha256', secret)
-      .update(bodyStr)
-      .digest('hex');
-  }
+  headers['X-Mido-Signature'] = crypto
+    .createHmac('sha256', secret)
+    .update(bodyStr)
+    .digest('hex');
 
   try {
     const controller = new AbortController();
@@ -536,10 +540,10 @@ async function startServer() {
   // Allow strictly allowlisted origins (e.g. https://mido-optics-servies.vercel.app) for /api/external/*
   app.use('/api/external', (req, res, next) => {
     const origin = (req.header('origin') || '').trim();
-    const configuredUrl = (getStoreSettings().externalAdminUrl || 'https://mido-optics-servies.vercel.app').replace(/\/+$/, '');
+    const configuredUrl = getStoreSettings().externalAdminUrl.replace(/\/+$/, '');
     const allowedOrigins = new Set([
       'https://mido-optics-servies.vercel.app',
-      configuredUrl,
+      ...(configuredUrl ? [configuredUrl] : []),
     ]);
     if (origin && allowedOrigins.has(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
@@ -559,7 +563,8 @@ async function startServer() {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     next();
   });
-  app.use('/uploads', express.static(UPLOAD_ROOT));
+  app.use('/uploads/catalog', express.static(CATALOG_UPLOAD_DIR));
+  app.use('/uploads/models', express.static(MODEL_UPLOAD_DIR));
 
   // Public health & store routes
   app.get('/api/health', (_req, res) => {
@@ -597,21 +602,6 @@ async function startServer() {
     res.json(listLenses(false));
   });
 
-  // Public prescription photo upload
-  app.post('/api/upload-prescription', (req, res) => {
-    uploadRx.single('image')(req, res, (err) => {
-      if (err) {
-        res.status(400).json({ error: err.message || 'فشل رفع صورة الكشف' });
-        return;
-      }
-      if (!req.file) {
-        res.status(400).json({ error: 'لم يتم إرفاق صورة' });
-        return;
-      }
-      res.status(201).json({ url: `/uploads/prescriptions/${req.file.filename}` });
-    });
-  });
-
   // Server-authoritative Order & Pre-Order Checkout (Cash on Delivery)
   app.post('/api/orders', async (req, res) => {
     const parsed = orderInputSchema.safeParse(req.body);
@@ -621,6 +611,40 @@ async function startServer() {
     }
     const payload = parsed.data;
     const reqHost = req.header('host');
+    const idempotencyHash = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(payload))
+      .digest('hex');
+
+    if (payload.orderCode) {
+      const existingRow = db
+        .prepare('SELECT idempotency_hash FROM orders WHERE order_code = ?')
+        .get(payload.orderCode) as { idempotency_hash: string } | undefined;
+      if (existingRow) {
+        if (existingRow.idempotency_hash !== idempotencyHash) {
+          res.status(409).json({ error: 'كود الطلب مستخدم بالفعل لبيانات مختلفة.' });
+          return;
+        }
+        const existingOrder = listOrders().find((order) => order.orderCode === payload.orderCode);
+        if (!existingOrder) {
+          res.status(500).json({ error: 'تعذر استرجاع الطلب المسجل.' });
+          return;
+        }
+        res.status(200).json({
+          ...enrichOrderForExternal(existingOrder, reqHost),
+          idempotent: true,
+        });
+        return;
+      }
+
+      const deletedRow = db
+        .prepare('SELECT order_code FROM deleted_order_codes WHERE order_code = ?')
+        .get(payload.orderCode);
+      if (deletedRow) {
+        res.status(410).json({ error: 'هذا الطلب حُذف مسبقاً. حدّث الصفحة لبدء طلب جديد.' });
+        return;
+      }
+    }
 
     try {
       const createdOrder = db.transaction(() => {
@@ -650,45 +674,7 @@ async function startServer() {
           }
 
           if (!productRow) {
-            if (!item.productName || item.framePrice === undefined) {
-              throw new Error(`PRODUCT_NOT_FOUND:${item.productId}`);
-            }
-            const cloudCategory: ProductCategory = item.category || 'prescription';
-            const cloudOrderType: 'standard' | 'preorder' =
-              item.orderType === 'preorder' ? 'preorder' : 'standard';
-            if (cloudOrderType === 'preorder') isPreorder = true;
-            if (cloudCategory === 'prescription') hasOpticalRx = true;
-
-            const cloudLensId = item.lensId ?? null;
-            const cloudLensName = item.lensName ?? null;
-            const cloudLensPrice =
-              cloudCategory === 'prescription' ? Math.max(0, Number(item.lensPrice) || 0) : 0;
-            const cloudFrameImg = item.frameImageUrl || item.imageUrl || '';
-
-            frameSubtotal += Number(item.framePrice) * item.quantity;
-            lensSubtotal += cloudLensPrice * item.quantity;
-
-            resolvedItems.push({
-              id: `${item.productId}-${item.variantId}-${cloudLensId || 'none'}`,
-              productId: item.productId,
-              productSlug: item.productSlug || `prod-${item.productId}`,
-              productName: item.productName,
-              category: cloudCategory,
-              variantId: item.variantId,
-              colorName: item.colorName || 'أساسي',
-              colorHex: item.colorHex || '#141413',
-              imageUrl: cloudFrameImg,
-              frameImageUrl: cloudFrameImg,
-              absoluteImageUrl: buildAbsoluteAssetUrl(cloudFrameImg, reqHost),
-              framePrice: Number(item.framePrice),
-              lensId: cloudLensId,
-              lensName: cloudLensName,
-              lensPrice: cloudLensPrice,
-              quantity: item.quantity,
-              frameShape: item.frameShape || 'round',
-              orderType: cloudOrderType,
-            });
-            continue;
+            throw new Error(`PRODUCT_NOT_FOUND:${item.productId}`);
           }
 
           type VariantRow = {
@@ -751,10 +737,6 @@ async function startServer() {
               lensId = lensRow.id;
               lensName = lensRow.name;
               lensPrice = lensRow.price;
-            } else if (item.lensName && item.lensPrice !== undefined) {
-              lensId = item.lensId ?? null;
-              lensName = item.lensName;
-              lensPrice = Math.max(0, Number(item.lensPrice) || 0);
             } else {
               throw new Error(`LENS_NOT_FOUND:${item.lensId ?? item.lensName}`);
             }
@@ -769,7 +751,7 @@ async function startServer() {
           }
 
           const images = JSON.parse(variantRow.images_json) as string[];
-          const frameImg = images[0] || item.frameImageUrl || item.imageUrl || '';
+          const frameImg = images[0] || '';
           frameSubtotal += productRow.price * item.quantity;
           lensSubtotal += lensPrice * item.quantity;
 
@@ -815,24 +797,22 @@ async function startServer() {
         const frameSubRounded = Math.round(frameSubtotal * 100) / 100;
         const lensSubRounded = Math.round(lensSubtotal * 100) / 100;
         const total = Math.round((frameSubRounded + lensSubRounded) * 100) / 100;
-        const orderCode = `MDO-${Date.now().toString().slice(-5)}-${crypto
-          .randomBytes(2)
-          .toString('hex')
-          .toUpperCase()}`;
-        const invoiceNumber = `INV-${orderCode}`;
+        const orderCode = payload.orderCode;
+        const invoiceNumber = payload.invoiceNumber;
         const orderType = isPreorder ? 'preorder' : 'standard';
 
         const info = db
           .prepare(`
             INSERT INTO orders (
-              order_code, invoice_number, order_type, customer_name, customer_phone, customer_address,
+              order_code, invoice_number, idempotency_hash, order_type, customer_name, customer_phone, customer_address,
               payment_method, notes, items_json, prescription_json,
               frame_subtotal, lens_subtotal, subtotal, total, status, external_sync_status
-            ) VALUES (?, ?, ?, ?, ?, ?, 'cash_on_delivery', ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending')
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'cash_on_delivery', ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending')
           `)
           .run(
             orderCode,
             invoiceNumber,
+            idempotencyHash,
             orderType,
             payload.customerName,
             payload.customerPhone,
@@ -884,14 +864,29 @@ async function startServer() {
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
+      if (payload.orderCode) {
+        const racedRow = db
+          .prepare('SELECT idempotency_hash FROM orders WHERE order_code = ?')
+          .get(payload.orderCode) as { idempotency_hash: string } | undefined;
+        if (racedRow?.idempotency_hash === idempotencyHash) {
+          const racedOrder = listOrders().find((order) => order.orderCode === payload.orderCode);
+          if (racedOrder) {
+            res.status(200).json({
+              ...enrichOrderForExternal(racedOrder, reqHost),
+              idempotent: true,
+            });
+            return;
+          }
+        }
+      }
       if (
         msg.startsWith('PRODUCT_NOT_FOUND:') ||
         msg.startsWith('VARIANT_NOT_FOUND:') ||
         msg.startsWith('LENS_NOT_FOUND:')
       ) {
-        res.status(404).json({
-          code: 'CLOUD_CATALOG_FALLBACK',
-          error: 'المنتج مرتبط بالكتالوج السحابي، جاري التحويل للحفظ السحابي.',
+        res.status(409).json({
+          code: 'CATALOG_SYNC_REQUIRED',
+          error: 'بيانات المنتج غير متزامنة مع خادم الطلبات. حدّث مزامنة المتجر وحاول مرة أخرى.',
         });
         return;
       }
@@ -1180,8 +1175,9 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  app.get('/api/admin/orders', requireAdmin, (_req, res) => {
-    res.json(listOrders());
+  app.get('/api/admin/orders', requireAdmin, (req, res) => {
+    const host = req.header('host');
+    res.json(listOrders().map((order) => enrichOrderForExternal(order, host)));
   });
 
   app.patch('/api/admin/orders/:id/status', requireAdmin, (req, res) => {
@@ -1272,7 +1268,7 @@ async function startServer() {
       JSON.stringify(s.phones),
       s.whatsapp,
       s.workingHours,
-      s.externalAdminUrl || 'https://mido-optics-servies.vercel.app',
+      s.externalAdminUrl || '',
     );
     res.json(getStoreSettings());
   });
@@ -1307,7 +1303,7 @@ async function startServer() {
       JSON.stringify(s.phones),
       s.whatsapp,
       s.workingHours,
-      s.externalAdminUrl || 'https://mido-optics-servies.vercel.app',
+      s.externalAdminUrl || '',
     );
     res.json(getStoreSettings());
   });

@@ -31,9 +31,11 @@ import {
   fetchFirestoreAdminOrders,
   fetchFirestoreAllLenses,
   fetchFirestoreAllProducts,
+  fetchFirestoreDeletedOrderCodes,
   fetchFirestoreStoreSettings,
   saveFirestoreLens,
   saveFirestoreProduct,
+  saveFirestoreDeletedOrderCodes,
   saveFirestoreStoreSettings,
   syncCatalogToFirestore,
   updateFirestoreOrderStatus,
@@ -201,15 +203,21 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
     tombstoneOverride?: string[],
   ) => {
     try {
-      const [cloudOrders, cloudProducts, cloudLenses, cloudStore] = await Promise.all([
+      const [cloudOrders, cloudProducts, cloudLenses, cloudStore, cloudDeletedOrderCodes] = await Promise.all([
         fetchFirestoreAdminOrders(),
         fetchFirestoreAllProducts(),
         fetchFirestoreAllLenses(),
         fetchFirestoreStoreSettings(),
+        fetchFirestoreDeletedOrderCodes(),
       ]);
       const effectiveTombstones = Array.from(
-        new Set([...deletedCodes, ...(tombstoneOverride ?? [])].map((c) => c.toUpperCase())),
+        new Set(
+          [...deletedCodes, ...(tombstoneOverride ?? []), ...cloudDeletedOrderCodes].map((c) =>
+            c.toUpperCase(),
+          ),
+        ),
       );
+      setDeletedCodes(effectiveTombstones);
       const blockedSet = new Set(effectiveTombstones);
       const strayCloudOrders = cloudOrders.filter((o) => blockedSet.has(o.orderCode.toUpperCase()));
       if (strayCloudOrders.length > 0 && firebaseUser) {
@@ -238,8 +246,7 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
                 ? cloudStore.storyBeats
                 : [DEFAULT_BEAT],
             heroModelUrl: cloudStore.heroModelUrl || '',
-            externalAdminUrl:
-              cloudStore.externalAdminUrl || 'https://mido-optics-servies.vercel.app',
+            externalAdminUrl: cloudStore.externalAdminUrl || '',
           });
           setPhonesText((cloudStore.phones || []).join('، '));
         }
@@ -313,8 +320,7 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
               ? storeData.storyBeats
               : [DEFAULT_BEAT],
           heroModelUrl: storeData.heroModelUrl || '',
-          externalAdminUrl:
-            storeData.externalAdminUrl || 'https://mido-optics-servies.vercel.app',
+          externalAdminUrl: storeData.externalAdminUrl || '',
         });
         setPhonesText((storeData.phones || []).join('، '));
       } catch {
@@ -609,10 +615,15 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
           ...payload,
         });
       } catch (err) {
-        if (!token) {
-          setErrorMessage(err instanceof Error ? err.message : 'تعذر حفظ المنتج في السحابة');
-          return;
-        }
+        if (token) setEditingProductId(savedId);
+        setErrorMessage(
+          token
+            ? `تم الحفظ على الخادم المحلي، لكن Firebase رفض المزامنة. سجّل بحساب الإدارة المصرح ثم انشر قواعد Firestore: ${err instanceof Error ? err.message : 'تعذر حفظ المنتج في السحابة'}`
+            : err instanceof Error
+              ? err.message
+              : 'تعذر حفظ المنتج في السحابة',
+        );
+        return;
       }
     }
 
@@ -711,10 +722,15 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
           sortOrder: 0,
         });
       } catch (err) {
-        if (!token) {
-          setErrorMessage(err instanceof Error ? err.message : 'تعذر حفظ العدسة في السحابة');
-          return;
-        }
+        if (token) setEditingLensId(savedId);
+        setErrorMessage(
+          token
+            ? `تم الحفظ على الخادم المحلي، لكن Firebase رفض المزامنة. سجّل بحساب الإدارة المصرح ثم انشر قواعد Firestore: ${err instanceof Error ? err.message : 'تعذر حفظ العدسة في السحابة'}`
+            : err instanceof Error
+              ? err.message
+              : 'تعذر حفظ العدسة في السحابة',
+        );
+        return;
       }
     }
 
@@ -774,14 +790,16 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
     }
     setDeletingOrders(true);
     try {
+      if (firebaseUser) {
+        await saveFirestoreDeletedOrderCodes([order.orderCode]);
+        await deleteFirestoreOrder(order.orderCode, order.firestoreDocId);
+      }
       if (token) {
-        await fetch(`/api/admin/orders/${encodeURIComponent(order.orderCode)}`, {
+        const localRes = await fetch(`/api/admin/orders/${encodeURIComponent(order.orderCode)}`, {
           method: 'DELETE',
           headers: authHeaders(token),
         });
-      }
-      if (firebaseUser) {
-        await deleteFirestoreOrder(order.orderCode, order.firestoreDocId);
+        if (!localRes.ok) throw new Error('تعذر حذف الطلب من قاعدة الموقع المحلية.');
       }
       setDeletedCodes((prev) => Array.from(new Set([...prev, order.orderCode])));
       setOrders((prev) => prev.filter((o) => o.orderCode !== order.orderCode));
@@ -817,14 +835,16 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
     setDeletingOrders(true);
     try {
       const removedCodes = orders.map((o) => o.orderCode);
+      if (firebaseUser) {
+        await saveFirestoreDeletedOrderCodes(removedCodes);
+        await deleteAllFirestoreOrders();
+      }
       if (token) {
-        await fetch('/api/admin/orders', {
+        const localRes = await fetch('/api/admin/orders', {
           method: 'DELETE',
           headers: authHeaders(token),
         });
-      }
-      if (firebaseUser) {
-        await deleteAllFirestoreOrders();
+        if (!localRes.ok) throw new Error('تعذر مسح الطلبات من قاعدة الموقع المحلية.');
       }
       setDeletedCodes((prev) => Array.from(new Set([...prev, ...removedCodes])));
       setInvoiceOrder(null);
@@ -889,10 +909,14 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       try {
         await saveFirestoreStoreSettings(updatedStore);
       } catch (err) {
-        if (!token) {
-          setErrorMessage(err instanceof Error ? err.message : 'تعذر حفظ بيانات المتجر في السحابة');
-          return;
-        }
+        setErrorMessage(
+          token
+            ? `تم الحفظ على الخادم المحلي، لكن Firebase رفض المزامنة. سجّل بحساب الإدارة المصرح ثم انشر قواعد Firestore: ${err instanceof Error ? err.message : 'تعذر حفظ بيانات المتجر في السحابة'}`
+            : err instanceof Error
+              ? err.message
+              : 'تعذر حفظ بيانات المتجر في السحابة',
+        );
+        return;
       }
     }
     setStatusMessage('تم حفظ بيانات المحل ولمحات القصة بنجاح.');
@@ -901,7 +925,7 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
 
   if (!token && !firebaseUser) {
     return (
-      <div className="max-w-md mx-auto px-4 py-16">
+      <div className="admin-login max-w-md mx-auto px-4 py-16">
         <div className="bg-white rounded-2xl border border-[#141413]/12 p-6 sm:p-8 space-y-5">
           <form onSubmit={handleAuthSubmit} className="space-y-5">
             <div className="flex items-center gap-3">
@@ -966,7 +990,7 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
+    <div className="admin-dashboard max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
       <div className="no-print flex flex-wrap items-center justify-between gap-4 border-b border-[#141413]/10 pb-5">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-[#141413]">
@@ -1015,7 +1039,11 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       </div>
 
       {/* Tabs */}
-      <div className="no-print flex items-center gap-2 p-1.5 bg-[#EFECE5] rounded-xl w-fit overflow-x-auto max-w-full">
+      <div
+        className="no-print flex items-center gap-2 p-1.5 bg-[#EFECE5] rounded-xl w-fit overflow-x-auto max-w-full"
+        role="navigation"
+        aria-label="أقسام لوحة التحكم"
+      >
         {(
           [
             { key: 'products', label: `المنتجات والحجز المسبق (${products.length})` },
@@ -1029,6 +1057,8 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
             key={tab.key}
             type="button"
             onClick={() => setActiveTab(tab.key)}
+            aria-current={activeTab === tab.key ? 'page' : undefined}
+            aria-pressed={activeTab === tab.key}
             className={`px-4 py-2 rounded-lg text-xs sm:text-sm whitespace-nowrap shrink-0 ${
               activeTab === tab.key
                 ? 'bg-white text-[#141413] font-bold border border-[#141413]/15 shadow-sm'
@@ -1041,13 +1071,13 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       </div>
 
       {statusMessage && (
-        <div className="no-print p-3.5 rounded-xl bg-[#256D4A]/10 border border-[#256D4A]/25 text-xs font-medium text-[#256D4A] flex items-center gap-2">
+        <div role="status" aria-live="polite" className="no-print p-3.5 rounded-xl bg-[#256D4A]/10 border border-[#256D4A]/25 text-xs font-medium text-[#256D4A] flex items-center gap-2">
           <Check className="w-4 h-4" />
           <span>{statusMessage}</span>
         </div>
       )}
       {errorMessage && (
-        <div className="no-print p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-800">
+        <div role="alert" className="no-print p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-800">
           {errorMessage}
         </div>
       )}
@@ -2252,19 +2282,23 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
               <h2 className="text-lg font-bold text-[#141413]">
                 ربط لوحة التحكم الخارجية (Vercel)
               </h2>
-              <a
-                href={storeForm?.externalAdminUrl || 'https://mido-optics-servies.vercel.app'}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs font-bold text-[#9A7B4F] inline-flex items-center gap-1 underline"
-              >
-                <span>فتح الموقع الثاني</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
+              {storeForm?.externalAdminUrl ? (
+                <a
+                  href={storeForm.externalAdminUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-bold text-[#9A7B4F] inline-flex items-center gap-1 underline"
+                >
+                  <span>فتح الموقع الثاني</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              ) : (
+                <span className="text-xs text-[#6E6B64]">أضف رابط اللوحة لحفظه هنا</span>
+              )}
             </div>
 
             <p className="text-xs text-[#4A4843] leading-relaxed">
-              أي طلب جديد (خاصة طلبات النظارات الطبية مع العدسة المختارة ومقاسات OD/OS SPH-CYL-AXIS-ADD و IPD وصورة الكشف والفاتورة والحجز المسبق) يتم إرساله تلقائياً عبر Webhook إلى موقعك الثاني، كما توفر الواجهات التالية تحكماً كاملاً من لوحتك على Vercel:
+              عند ضبط رابط Webhook ومفتاح المزامنة في الخادم، تُرسل الطلبات المؤكدة إلى اللوحة الخارجية بتوقيع HMAC ومفتاح يمنع التكرار. يلزم تشغيل خادم الطلبات حتى تُراجع المنتجات والمخزون قبل الحفظ:
             </p>
 
             <div

@@ -59,7 +59,7 @@ export function Footer({ store, onNavigate }: FooterProps) {
 
         <div>
           <h4 className="text-sm font-bold text-[#141413] mb-3">التواصل والفرع</h4>
-          <p className="text-sm text-[#4A4843] mb-2">{store.address}</p>
+          {store.address && <p className="text-sm text-[#4A4843] mb-2">{store.address}</p>}
           <div className="flex flex-wrap gap-3 text-sm font-mono tabular-nums text-[#141413] mb-2">
             {store.phones.map((phone) => (
               <a
@@ -72,7 +72,7 @@ export function Footer({ store, onNavigate }: FooterProps) {
               </a>
             ))}
           </div>
-          <p className="text-xs text-[#6E6B64]">{store.workingHours}</p>
+          {store.workingHours && <p className="text-xs text-[#6E6B64]">{store.workingHours}</p>}
         </div>
       </div>
 

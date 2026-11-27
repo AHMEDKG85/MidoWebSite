@@ -610,6 +610,7 @@ export function GlassesHero3D({ scrollProgress, heroModelUrl }: GlassesHero3DPro
     let renderBusy = false;
     let renderDirty = false;
     let lastTime = performance.now();
+    const reduceMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
 
     function updateTargetsFromScroll() {
       const p =
@@ -670,7 +671,7 @@ export function GlassesHero3D({ scrollProgress, heroModelUrl }: GlassesHero3DPro
         const delta = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
         lastTime = now;
 
-        const lambda = 7.5;
+        const lambda = reduceMotionQuery.matches ? 10000 : 7.5;
         curRotY = THREE.MathUtils.damp(curRotY, targetRotY, lambda, delta);
         curRotX = THREE.MathUtils.damp(curRotX, targetRotX, lambda, delta);
         curRotZ = THREE.MathUtils.damp(curRotZ, targetRotZ, lambda, delta);
@@ -820,7 +821,7 @@ export function GlassesHero3D({ scrollProgress, heroModelUrl }: GlassesHero3DPro
   }, []);
 
   return (
-    <div className="relative w-full h-[380px] sm:h-[460px] lg:h-[540px] rounded-2xl overflow-hidden bg-[#F4F1EA] border border-[#141413]/10">
+    <div className="mido-3d-stage relative w-full h-[380px] sm:h-[460px] lg:h-[540px] rounded-2xl overflow-hidden bg-[#F4F1EA] border border-[#141413]/10">
       <div
         ref={mountRef}
         className="w-full h-full cursor-grab active:cursor-grabbing"

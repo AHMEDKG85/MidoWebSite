@@ -33,7 +33,7 @@ export function initDatabase(): void {
       phones_json TEXT NOT NULL,
       whatsapp TEXT NOT NULL,
       working_hours TEXT NOT NULL,
-      external_admin_url TEXT NOT NULL DEFAULT 'https://mido-optics-servies.vercel.app',
+      external_admin_url TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -87,6 +87,7 @@ export function initDatabase(): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       order_code TEXT NOT NULL UNIQUE,
       invoice_number TEXT NOT NULL DEFAULT '',
+      idempotency_hash TEXT NOT NULL DEFAULT '',
       order_type TEXT NOT NULL DEFAULT 'standard',
       customer_name TEXT NOT NULL,
       customer_phone TEXT NOT NULL,
@@ -115,11 +116,12 @@ export function initDatabase(): void {
   ensureColumn(
     'store_settings',
     'external_admin_url',
-    "TEXT NOT NULL DEFAULT 'https://mido-optics-servies.vercel.app'",
+    "TEXT NOT NULL DEFAULT ''",
   );
   ensureColumn('products', 'allow_preorder', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('products', 'preorder_note', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('orders', 'invoice_number', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('orders', 'idempotency_hash', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('orders', 'order_type', "TEXT NOT NULL DEFAULT 'standard'");
   ensureColumn('orders', 'frame_subtotal', 'REAL NOT NULL DEFAULT 0');
   ensureColumn('orders', 'lens_subtotal', 'REAL NOT NULL DEFAULT 0');
@@ -136,18 +138,18 @@ function ensureColumn(table: string, column: string, definition: string): void {
 export const DEFAULT_STORY_BEATS = [
   {
     title: 'لمحة عن ميدو للبصريات',
-    subtitle: 'خبرة تمتد لسنوات في العناية بالنظر',
-    body: 'بدأنا في قلب المهندسين برؤية واضحة: أن يحصل كل عميل على فحص بصري دقيق وإطار يليق بملامحه دون تعقيد، مع متابعة شخصية قبل الطلب وبعد الاستلام.',
+    subtitle: 'تعرف على المحل',
+    body: 'أضف نبذة المحل وتفاصيله من لوحة التحكم.',
   },
   {
-    title: 'تجهيز عدسات بمعايير طبية دقيقة',
-    subtitle: 'معمل بصري مجهز بأحدث أجهزة القص والسنترة',
-    body: 'ننفذ مقاسات النظر الطبية بدقة متناهية شاملة مقاس القراءة ADD والمسافة بين الحدقتين IPD، مع خيارات العدسات المضغوطة وحماية الشاشات.',
+    title: 'خدمات المحل',
+    subtitle: 'أضف الخدمات التي تقدمها',
+    body: 'اكتب تفاصيل الخدمات والعدسات المتاحة من لوحة التحكم.',
   },
   {
-    title: 'معاينة فورية وخدمة حجز مسبق مرنة',
-    subtitle: 'جرب الإطار بالكاميرا وادفع عند الاستلام',
-    body: 'سواء اخترت من التشكيلة الجاهزة أو عبر نظام الحجز المسبق للإصدارات الخاصة، نوصلك طلبك مع فاتورة مفصلة والدفع نقداً عند الاستلام.',
+    title: 'التواصل والزيارة',
+    subtitle: 'كيف يصل إليك العميل؟',
+    body: 'أضف عنوان الفرع وأرقام التواصل وساعات العمل من لوحة التحكم.',
   },
 ];
 
@@ -163,22 +165,22 @@ export function seedDatabaseIfEmpty(): void {
     `).run(
       'ميدو للبصريات | MIDO OPTICS',
       'حرفية بصرية تجمع بين دقة القياس وأناقة الإطار',
-      'في ميدو للبصريات نؤمن بأن النظارة ليست مجرد أداة لتصحيح النظر، بل قطعة يومية تعبر عن ذوقك وتمنح عينيك راحة كاملة. نختار إطاراتنا بعناية، ونجهزها بعدسات طبية دقيقة الفحص مع إمكانية معاينة الإطار على وجهك عبر الكاميرا قبل الطلب.',
+      'أضف نبذة المحل من لوحة التحكم لتظهر هنا.',
       JSON.stringify(DEFAULT_STORY_BEATS),
-      'القاهرة — المهندسين، 42 شارع جامعة الدول العربية، بجوار محطة المترو',
-      'https://maps.google.com/?q=30.0566,31.2001',
-      JSON.stringify(['01012345678', '01198765432', '0233456789']),
-      '201012345678',
-      'يومياً من 11:00 صباحاً حتى 11:00 مساءً',
-      'https://mido-optics-servies.vercel.app',
+      '',
+      '',
+      JSON.stringify([]),
+      '',
+      '',
+      '',
     );
   }
 
   const productCount = db.prepare('SELECT COUNT(*) AS count FROM products').get() as { count: number };
-  if (productCount.count === 0) {
+  if (productCount.count === 0 && process.env.SEED_DEMO_CATALOG === 'true') {
     const insertProduct = db.prepare(`
       INSERT INTO products (slug, name, category, price, short_desc, full_desc, frame_shape, material, dimensions, published)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `);
     const insertVariant = db.prepare(`
       INSERT INTO product_variants (product_id, color_name, color_hex, stock, images_json, sort_order)
@@ -451,10 +453,10 @@ export function seedDatabaseIfEmpty(): void {
   }
 
   const lensCount = db.prepare('SELECT COUNT(*) AS count FROM lenses').get() as { count: number };
-  if (lensCount.count === 0) {
+  if (lensCount.count === 0 && process.env.SEED_DEMO_CATALOG === 'true') {
     const insertLens = db.prepare(`
       INSERT INTO lenses (name, subtitle, price, image_url, details_json, full_description, refractive_index, published, sort_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
     `);
 
     const seedLenses = [
@@ -552,15 +554,15 @@ export function getStoreSettings(): StoreSettings {
     return {
       storeName: 'ميدو للبصريات | MIDO OPTICS',
       tagline: 'رؤية مختلفة',
-      aboutText: 'متجر متخصص في النظارات الطبية والشمسية والعدسات اللاصقة.',
+      aboutText: 'أضف نبذة المحل من لوحة التحكم لتظهر هنا.',
       storyBeats: DEFAULT_STORY_BEATS,
       heroModelUrl: '',
-      address: 'القاهرة — المهندسين',
-      mapLink: 'https://maps.google.com',
-      phones: ['01012345678'],
-      whatsapp: '201012345678',
-      workingHours: 'يومياً 11 صباحاً - 11 مساءً',
-      externalAdminUrl: 'https://mido-optics-servies.vercel.app',
+      address: '',
+      mapLink: '',
+      phones: [],
+      whatsapp: '',
+      workingHours: '',
+      externalAdminUrl: '',
     };
   }
 
@@ -585,7 +587,7 @@ export function getStoreSettings(): StoreSettings {
     phones: safeParseJsonArray(row.phones_json),
     whatsapp: row.whatsapp,
     workingHours: row.working_hours,
-    externalAdminUrl: row.external_admin_url || 'https://mido-optics-servies.vercel.app',
+    externalAdminUrl: row.external_admin_url || '',
   };
 }
 
