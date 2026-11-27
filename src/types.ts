@@ -78,6 +78,9 @@ export interface CartItem {
   imageUrl: string;
   frameImageUrl?: string;
   absoluteImageUrl?: string;
+  image?: string;
+  photoUrl?: string;
+  productImage?: string;
   framePrice: number;
   lensId: number | null;
   lensName: string | null;
@@ -100,6 +103,8 @@ export interface PrescriptionPayload {
   os: EyePrescriptionValues;
   ipd: string;
   imageUrl: string;
+  absoluteImageUrl?: string;
+  photoUrl?: string;
 }
 
 export type OrderStatus =
@@ -124,6 +129,10 @@ export interface OrderRecord {
   notes: string;
   items: CartItem[];
   prescription: PrescriptionPayload | null;
+  frameImageUrl?: string;
+  selectedFrameName?: string;
+  selectedFrameColor?: string;
+  prescriptionImageUrl?: string;
   frameSubtotal: number;
   lensSubtotal: number;
   subtotal: number;

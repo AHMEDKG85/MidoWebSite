@@ -11,9 +11,11 @@ import {
   getProductBySlug,
   getStoreSettings,
   initDatabase,
+  listDeletedOrderCodes,
   listLenses,
   listOrders,
   listProducts,
+  recordDeletedOrderCodes,
   seedDatabaseIfEmpty,
 } from './server/db';
 import type { CartItem, OrderStatus, ProductCategory } from './src/types';
@@ -231,8 +233,20 @@ const orderInputSchema = z.object({
     .array(
       z.object({
         productId: z.number().int().positive(),
+        productSlug: z.string().trim().max(160).optional(),
+        productName: z.string().trim().max(200).optional(),
+        category: categorySchema.optional(),
         variantId: z.number().int().positive(),
+        colorName: z.string().trim().max(100).optional(),
+        colorHex: z.string().trim().max(20).optional(),
+        frameShape: z.string().trim().max(60).optional(),
+        imageUrl: z.string().trim().max(450000).optional(),
+        frameImageUrl: z.string().trim().max(450000).optional(),
+        framePrice: z.number().min(0).max(500000).optional(),
         lensId: z.number().int().positive().nullable().optional(),
+        lensName: z.string().trim().max(160).nullable().optional(),
+        lensPrice: z.number().min(0).max(100000).optional(),
+        orderType: z.enum(['standard', 'preorder']).optional(),
         quantity: z.number().int().min(1).max(20),
       }),
     )
@@ -243,7 +257,9 @@ const orderInputSchema = z.object({
       od: eyeRxSchema,
       os: eyeRxSchema,
       ipd: z.string().trim().max(12).optional().default(''),
-      imageUrl: z.string().trim().max(500).optional().default(''),
+      imageUrl: z.string().trim().max(450000).optional().default(''),
+      absoluteImageUrl: z.string().trim().max(450000).optional().default(''),
+      photoUrl: z.string().trim().max(450000).optional().default(''),
     })
     .nullable()
     .optional(),
@@ -317,6 +333,74 @@ function buildAbsoluteAssetUrl(relOrAbs: string, reqHost?: string): string {
   return base ? `${base}${relOrAbs.startsWith('/') ? '' : '/'}${relOrAbs}` : relOrAbs;
 }
 
+function inlineOrAbsoluteAssetUrl(relOrAbs: string, reqHost?: string): string {
+  const clean = (relOrAbs || '').trim();
+  if (!clean) return '';
+  if (clean.startsWith('data:') || clean.startsWith('https://') || clean.startsWith('http://')) {
+    return clean;
+  }
+  if (clean.startsWith('/uploads/')) {
+    const relUploadPath = clean.slice('/uploads/'.length);
+    const fullDiskPath = path.resolve(UPLOAD_ROOT, relUploadPath);
+    if (fullDiskPath.startsWith(UPLOAD_ROOT + path.sep) && fs.existsSync(fullDiskPath)) {
+      try {
+        const stat = fs.statSync(fullDiskPath);
+        if (stat.size <= 350 * 1024) {
+          const ext = path.extname(fullDiskPath).toLowerCase();
+          const mime =
+            ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+          return `data:${mime};base64,${fs.readFileSync(fullDiskPath).toString('base64')}`;
+        }
+      } catch {
+        // fallback to URL
+      }
+    }
+  }
+  return buildAbsoluteAssetUrl(clean, reqHost);
+}
+
+function enrichOrderForExternal(
+  order: ReturnType<typeof listOrders>[number],
+  reqHost?: string,
+) {
+  const enrichedItems = order.items.map((item) => {
+    const portableFrameImg = inlineOrAbsoluteAssetUrl(
+      item.frameImageUrl || item.absoluteImageUrl || item.imageUrl || item.image || item.photoUrl || '',
+      reqHost,
+    );
+    return {
+      ...item,
+      imageUrl: portableFrameImg,
+      frameImageUrl: portableFrameImg,
+      absoluteImageUrl: portableFrameImg,
+      image: portableFrameImg,
+      photoUrl: portableFrameImg,
+      productImage: portableFrameImg,
+    };
+  });
+  const firstItem = enrichedItems[0];
+  const portableRxImg = order.prescription?.imageUrl
+    ? inlineOrAbsoluteAssetUrl(order.prescription.imageUrl, reqHost)
+    : '';
+  const enrichedRx = order.prescription
+    ? {
+        ...order.prescription,
+        imageUrl: portableRxImg,
+        absoluteImageUrl: portableRxImg,
+        photoUrl: portableRxImg,
+      }
+    : null;
+  return {
+    ...order,
+    items: enrichedItems,
+    prescription: enrichedRx,
+    frameImageUrl: firstItem?.frameImageUrl || '',
+    selectedFrameName: firstItem?.productName || '',
+    selectedFrameColor: firstItem?.colorName || '',
+    prescriptionImageUrl: portableRxImg,
+  };
+}
+
 async function dispatchOrderToExternalAdmin(
   order: ReturnType<typeof listOrders>[number],
   reqHost?: string,
@@ -328,61 +412,67 @@ async function dispatchOrderToExternalAdmin(
   if (!safeUrl) return 'failed';
 
   const secret = (process.env.EXTERNAL_SYNC_SECRET || '').trim();
+  const enriched = enrichOrderForExternal(order, reqHost);
   const payload = {
     event: 'mido.order.created',
     source: 'mido-optics-storefront',
-    orderCode: order.orderCode,
-    invoiceNumber: order.invoiceNumber,
-    orderType: order.orderType,
-    paymentMethod: order.paymentMethod,
-    status: order.status,
-    createdAt: order.createdAt,
+    orderCode: enriched.orderCode,
+    invoiceNumber: enriched.invoiceNumber,
+    orderType: enriched.orderType,
+    paymentMethod: enriched.paymentMethod,
+    status: enriched.status,
+    createdAt: enriched.createdAt,
+    frameImageUrl: enriched.frameImageUrl,
+    selectedFrameName: enriched.selectedFrameName,
+    selectedFrameColor: enriched.selectedFrameColor,
+    prescriptionImageUrl: enriched.prescriptionImageUrl,
     customer: {
-      name: order.customerName,
-      phone: order.customerPhone,
-      address: order.customerAddress,
-      notes: order.notes,
+      name: enriched.customerName,
+      phone: enriched.customerPhone,
+      address: enriched.customerAddress,
+      notes: enriched.notes,
     },
-    items: order.items.map((item) => {
-      const absFrameImg = buildAbsoluteAssetUrl(item.imageUrl || item.frameImageUrl || '', reqHost);
-      return {
-        productId: item.productId,
-        productSlug: item.productSlug,
-        productName: item.productName,
-        category: item.category,
-        colorName: item.colorName,
-        colorHex: item.colorHex,
-        frameShape: item.frameShape || '',
-        imageUrl: item.imageUrl || absFrameImg,
-        frameImageUrl: absFrameImg,
-        absoluteImageUrl: absFrameImg,
-        quantity: item.quantity,
-        framePrice: item.framePrice,
-        lensName: item.lensName,
-        lensPrice: item.lensPrice,
-        unitTotal: item.framePrice + item.lensPrice,
-        lineTotal: (item.framePrice + item.lensPrice) * item.quantity,
-        orderType: item.orderType || order.orderType,
-      };
-    }),
-    prescription: order.prescription
+    items: enriched.items.map((item) => ({
+      productId: item.productId,
+      productSlug: item.productSlug,
+      productName: item.productName,
+      category: item.category,
+      colorName: item.colorName,
+      colorHex: item.colorHex,
+      frameShape: item.frameShape || '',
+      imageUrl: item.imageUrl,
+      frameImageUrl: item.frameImageUrl,
+      absoluteImageUrl: item.absoluteImageUrl,
+      image: item.image,
+      photoUrl: item.photoUrl,
+      productImage: item.productImage,
+      quantity: item.quantity,
+      framePrice: item.framePrice,
+      lensName: item.lensName,
+      lensPrice: item.lensPrice,
+      unitTotal: item.framePrice + item.lensPrice,
+      lineTotal: (item.framePrice + item.lensPrice) * item.quantity,
+      orderType: item.orderType || enriched.orderType,
+    })),
+    prescription: enriched.prescription
       ? {
-          mode: order.prescription.mode,
-          rightEye_OD: order.prescription.od,
-          leftEye_OS: order.prescription.os,
-          ipd: order.prescription.ipd,
-          imageUrl: order.prescription.imageUrl,
-          absoluteImageUrl: buildAbsoluteAssetUrl(order.prescription.imageUrl, reqHost),
+          mode: enriched.prescription.mode,
+          rightEye_OD: enriched.prescription.od,
+          leftEye_OS: enriched.prescription.os,
+          ipd: enriched.prescription.ipd,
+          imageUrl: enriched.prescription.imageUrl,
+          absoluteImageUrl: enriched.prescription.absoluteImageUrl || enriched.prescription.imageUrl,
+          photoUrl: enriched.prescription.photoUrl || enriched.prescription.imageUrl,
         }
       : null,
     invoice: {
-      invoiceNumber: order.invoiceNumber,
+      invoiceNumber: enriched.invoiceNumber,
       currency: 'EGP',
-      frameSubtotal: order.frameSubtotal,
-      lensSubtotal: order.lensSubtotal,
-      total: order.total,
+      frameSubtotal: enriched.frameSubtotal,
+      lensSubtotal: enriched.lensSubtotal,
+      total: enriched.total,
       paymentMethod: 'cash_on_delivery',
-      issuedAt: order.createdAt,
+      issuedAt: enriched.createdAt,
     },
   };
 
@@ -441,7 +531,7 @@ function requireExternalSyncAuth(
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '4mb' }));
 
   // Allow strictly allowlisted origins (e.g. https://mido-optics-servies.vercel.app) for /api/external/*
   app.use('/api/external', (req, res, next) => {
@@ -541,34 +631,88 @@ async function startServer() {
         let isPreorder = false;
 
         for (const item of payload.items) {
-          const productRow = db
+          type ProductRow = {
+            id: number;
+            slug: string;
+            name: string;
+            category: ProductCategory;
+            price: number;
+            frame_shape: string;
+            allow_preorder?: number;
+          };
+          let productRow = db
             .prepare('SELECT * FROM products WHERE id = ? AND published = 1')
-            .get(item.productId) as
-            | {
-                id: number;
-                slug: string;
-                name: string;
-                category: ProductCategory;
-                price: number;
-                frame_shape: string;
-                allow_preorder?: number;
-              }
-            | undefined;
-          if (!productRow) {
-            throw new Error(`PRODUCT_NOT_FOUND:${item.productId}`);
+            .get(item.productId) as ProductRow | undefined;
+          if (!productRow && item.productSlug) {
+            productRow = db
+              .prepare('SELECT * FROM products WHERE slug = ? AND published = 1')
+              .get(item.productSlug) as ProductRow | undefined;
           }
 
-          const variantRow = db
+          if (!productRow) {
+            if (!item.productName || item.framePrice === undefined) {
+              throw new Error(`PRODUCT_NOT_FOUND:${item.productId}`);
+            }
+            const cloudCategory: ProductCategory = item.category || 'prescription';
+            const cloudOrderType: 'standard' | 'preorder' =
+              item.orderType === 'preorder' ? 'preorder' : 'standard';
+            if (cloudOrderType === 'preorder') isPreorder = true;
+            if (cloudCategory === 'prescription') hasOpticalRx = true;
+
+            const cloudLensId = item.lensId ?? null;
+            const cloudLensName = item.lensName ?? null;
+            const cloudLensPrice =
+              cloudCategory === 'prescription' ? Math.max(0, Number(item.lensPrice) || 0) : 0;
+            const cloudFrameImg = item.frameImageUrl || item.imageUrl || '';
+
+            frameSubtotal += Number(item.framePrice) * item.quantity;
+            lensSubtotal += cloudLensPrice * item.quantity;
+
+            resolvedItems.push({
+              id: `${item.productId}-${item.variantId}-${cloudLensId || 'none'}`,
+              productId: item.productId,
+              productSlug: item.productSlug || `prod-${item.productId}`,
+              productName: item.productName,
+              category: cloudCategory,
+              variantId: item.variantId,
+              colorName: item.colorName || 'أساسي',
+              colorHex: item.colorHex || '#141413',
+              imageUrl: cloudFrameImg,
+              frameImageUrl: cloudFrameImg,
+              absoluteImageUrl: buildAbsoluteAssetUrl(cloudFrameImg, reqHost),
+              framePrice: Number(item.framePrice),
+              lensId: cloudLensId,
+              lensName: cloudLensName,
+              lensPrice: cloudLensPrice,
+              quantity: item.quantity,
+              frameShape: item.frameShape || 'round',
+              orderType: cloudOrderType,
+            });
+            continue;
+          }
+
+          type VariantRow = {
+            id: number;
+            color_name: string;
+            color_hex: string;
+            stock: number;
+            images_json: string;
+          };
+          let variantRow = db
             .prepare('SELECT * FROM product_variants WHERE id = ? AND product_id = ?')
-            .get(item.variantId, item.productId) as
-            | {
-                id: number;
-                color_name: string;
-                color_hex: string;
-                stock: number;
-                images_json: string;
-              }
-            | undefined;
+            .get(item.variantId, productRow.id) as VariantRow | undefined;
+          if (!variantRow && item.colorName) {
+            variantRow = db
+              .prepare('SELECT * FROM product_variants WHERE product_id = ? AND color_name = ?')
+              .get(productRow.id, item.colorName) as VariantRow | undefined;
+          }
+          if (!variantRow) {
+            variantRow = db
+              .prepare(
+                'SELECT * FROM product_variants WHERE product_id = ? ORDER BY sort_order ASC, id ASC LIMIT 1',
+              )
+              .get(productRow.id) as VariantRow | undefined;
+          }
           if (!variantRow) {
             throw new Error(`VARIANT_NOT_FOUND:${item.variantId}`);
           }
@@ -589,18 +733,31 @@ async function startServer() {
 
           if (productRow.category === 'prescription') {
             hasOpticalRx = true;
-            if (!item.lensId) {
+            if (!item.lensId && !item.lensName) {
               throw new Error(`LENS_REQUIRED:${productRow.name}`);
             }
-            const lensRow = db
-              .prepare('SELECT id, name, price FROM lenses WHERE id = ? AND published = 1')
-              .get(item.lensId) as { id: number; name: string; price: number } | undefined;
-            if (!lensRow) {
-              throw new Error(`LENS_NOT_FOUND:${item.lensId}`);
+            type LensRow = { id: number; name: string; price: number };
+            let lensRow = item.lensId
+              ? (db
+                  .prepare('SELECT id, name, price FROM lenses WHERE id = ? AND published = 1')
+                  .get(item.lensId) as LensRow | undefined)
+              : undefined;
+            if (!lensRow && item.lensName) {
+              lensRow = db
+                .prepare('SELECT id, name, price FROM lenses WHERE name = ? AND published = 1')
+                .get(item.lensName) as LensRow | undefined;
             }
-            lensId = lensRow.id;
-            lensName = lensRow.name;
-            lensPrice = lensRow.price;
+            if (lensRow) {
+              lensId = lensRow.id;
+              lensName = lensRow.name;
+              lensPrice = lensRow.price;
+            } else if (item.lensName && item.lensPrice !== undefined) {
+              lensId = item.lensId ?? null;
+              lensName = item.lensName;
+              lensPrice = Math.max(0, Number(item.lensPrice) || 0);
+            } else {
+              throw new Error(`LENS_NOT_FOUND:${item.lensId ?? item.lensName}`);
+            }
           }
 
           // Decrement variant stock atomically when fulfilling from existing stock
@@ -612,7 +769,7 @@ async function startServer() {
           }
 
           const images = JSON.parse(variantRow.images_json) as string[];
-          const frameImg = images[0] || '';
+          const frameImg = images[0] || item.frameImageUrl || item.imageUrl || '';
           frameSubtotal += productRow.price * item.quantity;
           lensSubtotal += lensPrice * item.quantity;
 
@@ -701,6 +858,10 @@ async function startServer() {
           notes: payload.notes || '',
           items: resolvedItems,
           prescription: payload.prescription || null,
+          frameImageUrl: resolvedItems[0]?.frameImageUrl || resolvedItems[0]?.imageUrl || '',
+          selectedFrameName: resolvedItems[0]?.productName || '',
+          selectedFrameColor: resolvedItems[0]?.colorName || '',
+          prescriptionImageUrl: payload.prescription?.imageUrl || '',
           frameSubtotal: frameSubRounded,
           lensSubtotal: lensSubRounded,
           subtotal: total,
@@ -717,7 +878,10 @@ async function startServer() {
         createdOrder.id,
       );
 
-      res.status(201).json({ ...createdOrder, externalSyncStatus: syncResult });
+      res.status(201).json({
+        ...enrichOrderForExternal(createdOrder, reqHost),
+        externalSyncStatus: syncResult,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
       if (
@@ -1047,17 +1211,38 @@ async function startServer() {
     res.json({ status: syncResult, externalSyncStatus: syncResult });
   });
 
+  app.get('/api/admin/deleted-orders', requireAdmin, (_req, res) => {
+    res.json({ deletedOrderCodes: listDeletedOrderCodes() });
+  });
+
   app.delete('/api/admin/orders/:id', requireAdmin, (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
+    const rawId = decodeURIComponent(String(req.params.id || '')).trim();
+    if (!rawId) {
       res.status(400).json({ error: 'معرف الطلب غير صالح' });
       return;
     }
-    db.prepare('DELETE FROM orders WHERE id = ?').run(id);
-    res.json({ ok: true });
+    const numericId = Number(rawId);
+    const matching = (
+      Number.isInteger(numericId) && numericId > 0
+        ? db.prepare('SELECT id, order_code FROM orders WHERE id = ? OR order_code = ?').all(numericId, rawId)
+        : db.prepare('SELECT id, order_code FROM orders WHERE order_code = ?').all(rawId)
+    ) as Array<{ id: number; order_code: string }>;
+    const codes = matching.map((m) => m.order_code);
+    if (rawId.startsWith('MDO-') || rawId.startsWith('ord-')) {
+      codes.push(rawId.replace(/^ord-/i, '').toUpperCase());
+    }
+    recordDeletedOrderCodes(codes);
+    if (Number.isInteger(numericId) && numericId > 0) {
+      db.prepare('DELETE FROM orders WHERE id = ? OR order_code = ?').run(numericId, rawId);
+    } else {
+      db.prepare('DELETE FROM orders WHERE order_code = ?').run(rawId);
+    }
+    res.json({ ok: true, deletedOrderCodes: codes });
   });
 
   app.delete('/api/admin/orders', requireAdmin, (_req, res) => {
+    const rows = db.prepare('SELECT order_code FROM orders').all() as Array<{ order_code: string }>;
+    recordDeletedOrderCodes(rows.map((r) => r.order_code));
     const info = db.prepare('DELETE FROM orders').run();
     res.json({ ok: true, deletedCount: info.changes });
   });
@@ -1301,8 +1486,9 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  app.get('/api/external/orders', requireExternalSyncAuth, (_req, res) => {
-    res.json(listOrders());
+  app.get('/api/external/orders', requireExternalSyncAuth, (req, res) => {
+    const host = req.header('host');
+    res.json(listOrders().map((o) => enrichOrderForExternal(o, host)));
   });
 
   app.patch('/api/external/orders/:id/status', requireExternalSyncAuth, (req, res) => {
@@ -1320,16 +1506,29 @@ async function startServer() {
   });
 
   app.delete('/api/external/orders/:id', requireExternalSyncAuth, (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
+    const rawId = decodeURIComponent(String(req.params.id || '')).trim();
+    if (!rawId) {
       res.status(400).json({ error: 'Invalid order id' });
       return;
     }
-    db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+    const numericId = Number(rawId);
+    const matching = (
+      Number.isInteger(numericId) && numericId > 0
+        ? db.prepare('SELECT id, order_code FROM orders WHERE id = ? OR order_code = ?').all(numericId, rawId)
+        : db.prepare('SELECT id, order_code FROM orders WHERE order_code = ?').all(rawId)
+    ) as Array<{ id: number; order_code: string }>;
+    recordDeletedOrderCodes(matching.map((m) => m.order_code));
+    if (Number.isInteger(numericId) && numericId > 0) {
+      db.prepare('DELETE FROM orders WHERE id = ? OR order_code = ?').run(numericId, rawId);
+    } else {
+      db.prepare('DELETE FROM orders WHERE order_code = ?').run(rawId);
+    }
     res.json({ ok: true });
   });
 
   app.delete('/api/external/orders', requireExternalSyncAuth, (_req, res) => {
+    const rows = db.prepare('SELECT order_code FROM orders').all() as Array<{ order_code: string }>;
+    recordDeletedOrderCodes(rows.map((r) => r.order_code));
     const info = db.prepare('DELETE FROM orders').run();
     res.json({ ok: true, deletedCount: info.changes });
   });

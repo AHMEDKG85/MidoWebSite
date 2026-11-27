@@ -103,6 +103,11 @@ export function initDatabase(): void {
       external_sync_status TEXT NOT NULL DEFAULT 'not_configured',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS deleted_order_codes (
+      order_code TEXT PRIMARY KEY,
+      deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   ensureColumn('store_settings', 'story_beats_json', "TEXT NOT NULL DEFAULT '[]'");
@@ -826,4 +831,21 @@ export function listOrders(): OrderRecord[] {
       createdAt: r.created_at,
     };
   });
+}
+
+export function recordDeletedOrderCodes(orderCodes: string[]): void {
+  const stmt = db.prepare(
+    'INSERT OR REPLACE INTO deleted_order_codes (order_code, deleted_at) VALUES (?, datetime(\'now\'))',
+  );
+  for (const raw of orderCodes) {
+    const code = raw.trim();
+    if (code) stmt.run(code);
+  }
+}
+
+export function listDeletedOrderCodes(): string[] {
+  const rows = db
+    .prepare('SELECT order_code FROM deleted_order_codes ORDER BY deleted_at DESC LIMIT 200')
+    .all() as Array<{ order_code: string }>;
+  return rows.map((r) => r.order_code);
 }

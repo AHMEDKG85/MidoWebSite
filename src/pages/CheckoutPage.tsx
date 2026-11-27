@@ -12,6 +12,7 @@ import {
 import { InvoiceCard } from '../components/InvoiceCard';
 import { SmartImage } from '../components/SmartImage';
 import { createFirestoreOrder, resolveOrderImageUrl } from '../lib/firestoreStore';
+import { compressImageFileToDataUrl } from '../lib/imageUtils';
 import { generateClientOrderIdentifiers, readJsonSafe } from '../lib/safeFetch';
 import {
   calculateCartTotals,
@@ -34,31 +35,6 @@ interface CheckoutPageProps {
   onRemoveItem: (itemId: string) => void;
   onClearCart: () => void;
   onNavigate: (route: AppRoute) => void;
-}
-
-async function compressImageFileToDataUrl(file: File): Promise<string> {
-  const objectUrl = URL.createObjectURL(file);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error('تعذر قراءة الصورة'));
-      el.src = objectUrl;
-    });
-    const maxDim = 960;
-    const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
-    const width = Math.max(1, Math.round(img.width * scale));
-    const height = Math.max(1, Math.round(img.height * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('تعذر معالجة الصورة');
-    ctx.drawImage(img, 0, 0, width, height);
-    return canvas.toDataURL('image/jpeg', 0.72);
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
 }
 
 export function CheckoutPage({
@@ -99,6 +75,17 @@ export function CheckoutPage({
     setError('');
     setUploadingRx(true);
     try {
+      // Compress into a portable self-contained JPEG data URL so prescription photos display directly
+      // inside invoices and external dashboards without cross-domain redirects or missing /uploads files.
+      try {
+        const compressedUrl = await compressImageFileToDataUrl(file, 960, 0.72);
+        if (compressedUrl && compressedUrl.length <= 420000) {
+          setRxImageUrl(compressedUrl);
+          return;
+        }
+      } catch {
+        // Fallback to server multipart upload if client-side image compression is unavailable
+      }
       const form = new FormData();
       form.append('image', file);
       const res = await fetch('/api/upload-prescription', {
@@ -110,11 +97,10 @@ export function CheckoutPage({
         if (!parsed.ok || !parsed.data?.url) {
           throw new Error(parsed.data?.error || 'فشل رفع صورة كشف النظر');
         }
-        setRxImageUrl(parsed.data.url);
+        setRxImageUrl(resolveOrderImageUrl(parsed.data.url));
       } else {
-        // Static hosting fallback (e.g., Vercel frontend): compress image for direct Firestore storage
-        const compressedUrl = await compressImageFileToDataUrl(file);
-        setRxImageUrl(compressedUrl);
+        const compressedFallback = await compressImageFileToDataUrl(file, 720, 0.6);
+        setRxImageUrl(compressedFallback);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر رفع الصورة');
@@ -154,9 +140,10 @@ export function CheckoutPage({
         osAdd.trim(),
     );
 
+    const normalizedRxImg = rxImageUrl ? resolveOrderImageUrl(rxImageUrl) : '';
     const prescriptionPayload: PrescriptionPayload | null = totals.hasPrescriptionOpticalItem
       ? {
-          mode: rxImageUrl && hasManualInput ? 'both' : rxImageUrl ? 'upload' : 'manual',
+          mode: normalizedRxImg && hasManualInput ? 'both' : normalizedRxImg ? 'upload' : 'manual',
           od: {
             sph: odSph.trim(),
             cyl: odCyl.trim(),
@@ -170,7 +157,9 @@ export function CheckoutPage({
             add: osAdd.trim(),
           },
           ipd: ipd.trim(),
-          imageUrl: rxImageUrl,
+          imageUrl: normalizedRxImg,
+          absoluteImageUrl: normalizedRxImg,
+          photoUrl: normalizedRxImg,
         }
       : null;
 
@@ -200,6 +189,7 @@ export function CheckoutPage({
               productId: item.productId,
               productSlug: item.productSlug,
               productName: item.productName,
+              category: item.category,
               colorName: item.colorName,
               colorHex: item.colorHex,
               frameShape: item.frameShape,
@@ -255,6 +245,11 @@ export function CheckoutPage({
           notes: notes.trim(),
           items: itemsWithImages,
           prescription: prescriptionPayload,
+          frameImageUrl:
+            itemsWithImages[0]?.frameImageUrl || itemsWithImages[0]?.imageUrl || '',
+          selectedFrameName: itemsWithImages[0]?.productName || '',
+          selectedFrameColor: itemsWithImages[0]?.colorName || '',
+          prescriptionImageUrl: normalizedRxImg,
           frameSubtotal: totals.frameSubtotal,
           lensSubtotal: totals.lensSubtotal,
           subtotal: totals.total,

@@ -17,4 +17,7 @@ test('Firestore rules enforce default deny, Eight Pillars helpers, and PII isola
   assert.ok(rulesSource.includes("data.paymentMethod == 'cash_on_delivery'"));
   assert.ok(rulesSource.includes('resource.data.published == true || isAdmin()'));
   assert.ok(rulesSource.includes('affectedKeys().hasOnly('));
+  assert.ok(rulesSource.includes("'frameImageUrl'"));
+  assert.ok(rulesSource.includes("'selectedFrameName'"));
+  assert.ok(rulesSource.includes("'prescriptionImageUrl'"));
 });

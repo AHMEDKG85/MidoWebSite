@@ -117,7 +117,7 @@ service cloud.firestore {
         && isValidString(data.name, 2, 140)
         && isValidString(data.subtitle, 2, 240)
         && data.price is number && data.price >= 0 && data.price <= 100000
-        && isValidString(data.imageUrl, 1, 500)
+        && isValidString(data.imageUrl, 1, 450000)
         && data.details is list && data.details.size() >= 1 && data.details.size() <= 10
         && data.details[0] is string
         && isValidString(data.fullDescription, 2, 1500)
@@ -136,7 +136,8 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'orderCode', 'invoiceNumber', 'orderType', 'userId', 'customerName',
           'customerPhone', 'customerAddress', 'paymentMethod', 'notes', 'items',
-          'prescription', 'frameSubtotal', 'lensSubtotal', 'total', 'status',
+          'prescription', 'frameImageUrl', 'selectedFrameName', 'selectedFrameColor',
+          'prescriptionImageUrl', 'frameSubtotal', 'lensSubtotal', 'total', 'status',
           'externalSyncStatus', 'createdAt', 'updatedAt'
         ])
         && isValidString(data.orderCode, 4, 40)
@@ -152,6 +153,10 @@ service cloud.firestore {
         && data.items is list && data.items.size() >= 1 && data.items.size() <= 20
         && data.items[0] is map
         && (!('prescription' in data) || data.prescription == null || data.prescription is map)
+        && (!('frameImageUrl' in data) || (data.frameImageUrl is string && data.frameImageUrl.size() <= 450000))
+        && (!('selectedFrameName' in data) || (data.selectedFrameName is string && data.selectedFrameName.size() <= 240))
+        && (!('selectedFrameColor' in data) || (data.selectedFrameColor is string && data.selectedFrameColor.size() <= 120))
+        && (!('prescriptionImageUrl' in data) || (data.prescriptionImageUrl is string && data.prescriptionImageUrl.size() <= 450000))
         && data.frameSubtotal is number && data.frameSubtotal >= 0 && data.frameSubtotal <= 5000000
         && data.lensSubtotal is number && data.lensSubtotal >= 0 && data.lensSubtotal <= 5000000
         && data.total is number && data.total >= 0 && data.total <= 10000000

@@ -307,11 +307,15 @@ export function ApiDocsPage({ store, onNavigate }: ApiDocsPageProps) {
             dir="ltr"
             className="p-3.5 rounded-xl bg-[#141413] text-[#F7F6F2] font-mono text-[11px] overflow-x-auto leading-relaxed"
           >{`{
-  "event": "order.created",
+  "event": "mido.order.created",
   "order": {
     "orderCode": "MDO-...",
     "invoiceNumber": "INV-...",
     "orderType": "standard | preorder",
+    "frameImageUrl": "data:image/jpeg;base64,... | https://.../frame.jpg",
+    "selectedFrameName": "Classic Titanium Frame",
+    "selectedFrameColor": "أسود مطفي",
+    "prescriptionImageUrl": "data:image/jpeg;base64,... | https://.../rx.jpg",
     "items": [
       {
         "productName": "...",
@@ -321,6 +325,9 @@ export function ApiDocsPage({ store, onNavigate }: ApiDocsPageProps) {
         "imageUrl": "https://.../frame.jpg",
         "frameImageUrl": "https://.../frame.jpg",
         "absoluteImageUrl": "https://.../frame.jpg",
+        "image": "https://.../frame.jpg",
+        "photoUrl": "https://.../frame.jpg",
+        "productImage": "https://.../frame.jpg",
         "lensName": "...",
         "framePrice": 1800,
         "lensPrice": 650
@@ -329,7 +336,10 @@ export function ApiDocsPage({ store, onNavigate }: ApiDocsPageProps) {
     "prescription": {
       "odSph": "-1.25", "odCyl": "-0.50", "odAxis": "90", "odAdd": "+1.50",
       "osSph": "-1.00", "osCyl": "-0.25", "osAxis": "85", "osAdd": "+1.50",
-      "ipd": "63", "imageUrl": "/uploads/..."
+      "ipd": "63",
+      "imageUrl": "data:image/jpeg;base64,... | https://.../rx.jpg",
+      "absoluteImageUrl": "https://.../rx.jpg",
+      "photoUrl": "https://.../rx.jpg"
     },
     "total": 2450
   }

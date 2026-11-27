@@ -170,7 +170,7 @@
         "imageUrl": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 500
+          "maxLength": 450000
         },
         "details": {
           "type": "array",
@@ -264,6 +264,22 @@
         "prescription": {
           "type": "object",
           "description": "OD/OS SPH, CYL, AXIS, ADD, IPD and/or uploaded prescription image URL."
+        },
+        "frameImageUrl": {
+          "type": "string",
+          "maxLength": 450000
+        },
+        "selectedFrameName": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "selectedFrameColor": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "prescriptionImageUrl": {
+          "type": "string",
+          "maxLength": 450000
         },
         "frameSubtotal": {
           "type": "number"

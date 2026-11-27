@@ -23,6 +23,7 @@ import type {
   StoryBeat,
 } from '../types';
 import { auth, db, ensureFirestoreNetwork, handleFirestoreError, OperationType } from './firebase';
+import { pickOrderItemImage, pickPrescriptionImage, resolvePortableImageUrl } from './imageUtils';
 
 function safeSlugId(raw: string, fallbackPrefix: string): string {
   const cleaned = raw
@@ -60,20 +61,7 @@ function timestampToIso(value: unknown): string {
 }
 
 export function resolveOrderImageUrl(rawUrl?: string): string {
-  const clean = (rawUrl || '').trim();
-  if (!clean) return '';
-  if (
-    clean.startsWith('data:') ||
-    clean.startsWith('https://') ||
-    clean.startsWith('http://')
-  ) {
-    return clean;
-  }
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    const normalized = clean.startsWith('/') ? clean : `/${clean}`;
-    return `${window.location.origin}${normalized}`;
-  }
-  return clean;
+  return resolvePortableImageUrl(rawUrl);
 }
 
 export async function fetchFirestoreStoreSettings(): Promise<StoreSettings | null> {
@@ -216,6 +204,48 @@ export async function createFirestoreOrder(
   const orderId = `ord-${safeSlugId(safeOrderCode, 'ord')}`;
   const path = `orders/${orderId}`;
   try {
+    const normalizedItems = order.items.slice(0, 20).map((item) => {
+      const resolvedImg = resolveOrderImageUrl(
+        item.frameImageUrl || item.absoluteImageUrl || item.imageUrl || item.image || item.photoUrl || item.productImage,
+      );
+      return {
+        id: item.id,
+        productId: item.productId,
+        productSlug: item.productSlug,
+        productName: item.productName,
+        category: item.category,
+        variantId: item.variantId,
+        colorName: item.colorName,
+        colorHex: item.colorHex,
+        imageUrl: resolvedImg || item.imageUrl,
+        frameImageUrl: resolvedImg,
+        absoluteImageUrl: resolvedImg,
+        image: resolvedImg,
+        photoUrl: resolvedImg,
+        productImage: resolvedImg,
+        frameShape: item.frameShape || '',
+        framePrice: Number(item.framePrice) || 0,
+        lensId: item.lensId,
+        lensName: item.lensName,
+        lensPrice: Number(item.lensPrice) || 0,
+        quantity: Number(item.quantity) || 1,
+        orderType: item.orderType || order.orderType,
+      };
+    });
+    const firstItem = normalizedItems[0];
+    const rxImg = pickPrescriptionImage(
+      order.prescription as unknown as Record<string, unknown> | null,
+      order.prescriptionImageUrl,
+    );
+    const normalizedRx = order.prescription
+      ? {
+          ...order.prescription,
+          imageUrl: rxImg || order.prescription.imageUrl || '',
+          absoluteImageUrl: rxImg || order.prescription.imageUrl || '',
+          photoUrl: rxImg || order.prescription.imageUrl || '',
+        }
+      : null;
+
     const payload = {
       orderCode: safeOrderCode,
       invoiceNumber: (order.invoiceNumber || `INV-${safeOrderCode}`).slice(0, 40),
@@ -226,30 +256,12 @@ export async function createFirestoreOrder(
       customerAddress: order.customerAddress.trim().slice(0, 400),
       paymentMethod: 'cash_on_delivery' as const,
       notes: (order.notes || '').trim().slice(0, 600),
-      items: order.items.slice(0, 20).map((item) => {
-        const resolvedImg = resolveOrderImageUrl(item.imageUrl || item.frameImageUrl);
-        return {
-          id: item.id,
-          productId: item.productId,
-          productSlug: item.productSlug,
-          productName: item.productName,
-          category: item.category,
-          variantId: item.variantId,
-          colorName: item.colorName,
-          colorHex: item.colorHex,
-          imageUrl: item.imageUrl || resolvedImg,
-          frameImageUrl: resolvedImg,
-          absoluteImageUrl: resolvedImg,
-          frameShape: item.frameShape || '',
-          framePrice: Number(item.framePrice) || 0,
-          lensId: item.lensId,
-          lensName: item.lensName,
-          lensPrice: Number(item.lensPrice) || 0,
-          quantity: Number(item.quantity) || 1,
-          orderType: item.orderType || order.orderType,
-        };
-      }),
-      prescription: order.prescription,
+      items: normalizedItems,
+      prescription: normalizedRx,
+      frameImageUrl: (firstItem?.frameImageUrl || firstItem?.imageUrl || '').slice(0, 450000),
+      selectedFrameName: firstItem ? `${firstItem.productName}`.slice(0, 240) : '',
+      selectedFrameColor: firstItem ? `${firstItem.colorName}`.slice(0, 120) : '',
+      prescriptionImageUrl: rxImg.slice(0, 450000),
       frameSubtotal: Number(order.frameSubtotal) || 0,
       lensSubtotal: Number(order.lensSubtotal) || 0,
       total: Number(order.total) || 0,
@@ -378,7 +390,7 @@ export async function saveFirestoreLens(lens: OpticalLens): Promise<void> {
       name: lens.name.slice(0, 140),
       subtitle: (lens.subtitle || lens.name).slice(0, 240),
       price: Number(lens.price) || 0,
-      imageUrl: (lens.imageUrl || '/src/assets/images/optical_lens_crystal_1795761233547.jpg').slice(0, 500),
+      imageUrl: (lens.imageUrl || '/src/assets/images/optical_lens_crystal_1795761233547.jpg').slice(0, 450000),
       details,
       fullDescription: (lens.fullDescription || lens.subtitle || lens.name).slice(0, 1500),
       refractiveIndex: (lens.refractiveIndex || '1.56').slice(0, 60),
@@ -418,14 +430,28 @@ export async function fetchFirestoreAdminOrders(): Promise<OrderRecord[]> {
       const rawItems = Array.isArray(data.items) ? data.items : [];
       const items = rawItems.map((raw) => {
         const it = raw as Record<string, unknown>;
-        const bestImg = String(it.imageUrl || it.frameImageUrl || it.absoluteImageUrl || '');
+        const bestImg = pickOrderItemImage(it) || resolveOrderImageUrl(String(data.frameImageUrl || ''));
         return {
           ...it,
           imageUrl: bestImg,
-          frameImageUrl: String(it.frameImageUrl || bestImg),
-          absoluteImageUrl: String(it.absoluteImageUrl || bestImg),
+          frameImageUrl: bestImg,
+          absoluteImageUrl: bestImg,
+          image: bestImg,
+          photoUrl: bestImg,
+          productImage: bestImg,
         };
       }) as OrderRecord['items'];
+
+      const rawRx = (data.prescription as Record<string, unknown> | null) || null;
+      const rxImg = pickPrescriptionImage(rawRx, String(data.prescriptionImageUrl || ''));
+      const normalizedRx = rawRx
+        ? ({
+            ...rawRx,
+            imageUrl: rxImg,
+            absoluteImageUrl: rxImg,
+            photoUrl: rxImg,
+          } as OrderRecord['prescription'])
+        : null;
 
       return {
         id: idx + 1,
@@ -438,7 +464,11 @@ export async function fetchFirestoreAdminOrders(): Promise<OrderRecord[]> {
         paymentMethod: 'cash_on_delivery',
         notes: String(data.notes || ''),
         items,
-        prescription: data.prescription || null,
+        prescription: normalizedRx,
+        frameImageUrl: String(data.frameImageUrl || items[0]?.frameImageUrl || ''),
+        selectedFrameName: String(data.selectedFrameName || items[0]?.productName || ''),
+        selectedFrameColor: String(data.selectedFrameColor || items[0]?.colorName || ''),
+        prescriptionImageUrl: rxImg,
         frameSubtotal,
         lensSubtotal,
         subtotal: frameSubtotal + lensSubtotal || total,
@@ -482,13 +512,22 @@ export async function deleteFirestoreOrder(
 ): Promise<void> {
   if (!db) return;
   await ensureFirestoreNetwork();
-  const candidates = new Set<string>();
-  if (firestoreDocId) candidates.add(firestoreDocId);
+  const docIds = new Set<string>();
+  if (firestoreDocId) docIds.add(firestoreDocId);
   if (orderCode) {
-    candidates.add(`ord-${safeSlugId(orderCode, 'ord')}`);
-    candidates.add(orderCode);
+    docIds.add(`ord-${safeSlugId(orderCode, 'ord')}`);
+    docIds.add(orderCode);
+    try {
+      const q = query(collection(db, 'orders'), where('orderCode', '==', orderCode));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        docIds.add(d.id);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `orders/${orderCode}`);
+    }
   }
-  for (const docId of candidates) {
+  for (const docId of docIds) {
     const path = `orders/${docId}`;
     try {
       await deleteDoc(doc(db, 'orders', docId));
@@ -519,8 +558,8 @@ export async function syncCatalogToFirestore(payload: {
   store: StoreSettings;
   products: Product[];
   lenses: OpticalLens[];
-  orders?: OrderRecord[];
-}): Promise<{ syncedProducts: number; syncedLenses: number; syncedOrders: number }> {
+  deletedOrderCodes?: string[];
+}): Promise<{ syncedProducts: number; syncedLenses: number; cleanedOrders: number }> {
   await saveFirestoreStoreSettings(payload.store);
   for (const product of payload.products) {
     await saveFirestoreProduct(product);
@@ -528,20 +567,16 @@ export async function syncCatalogToFirestore(payload: {
   for (const lens of payload.lenses) {
     await saveFirestoreLens(lens);
   }
-  let syncedOrders = 0;
-  if (payload.orders) {
-    for (const order of payload.orders) {
-      const orderId = `ord-${safeSlugId(order.orderCode, 'ord')}`;
-      const existing = db ? await getDoc(doc(db, 'orders', orderId)) : null;
-      if (existing && !existing.exists()) {
-        await createFirestoreOrder(order);
-        syncedOrders += 1;
-      }
+  let cleanedOrders = 0;
+  if (payload.deletedOrderCodes && payload.deletedOrderCodes.length > 0) {
+    for (const code of payload.deletedOrderCodes) {
+      await deleteFirestoreOrder(code);
+      cleanedOrders += 1;
     }
   }
   return {
     syncedProducts: payload.products.length,
     syncedLenses: payload.lenses.length,
-    syncedOrders,
+    cleanedOrders,
   };
 }

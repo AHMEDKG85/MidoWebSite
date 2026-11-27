@@ -1,4 +1,5 @@
-import { Printer } from 'lucide-react';
+import { useState } from 'react';
+import { Download, Printer, X } from 'lucide-react';
 import { SmartImage } from './SmartImage';
 import { buildInvoiceLines, formatCurrencyEGP } from '../lib/storeLogic';
 import type { OrderRecord, StoreSettings } from '../types';
@@ -14,6 +15,7 @@ export function InvoiceCard({
   store,
   showPrintButton = true,
 }: InvoiceCardProps) {
+  const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
   const lines = buildInvoiceLines(order);
   const storeName = store?.storeName || 'ميدو للبصريات | MIDO OPTICS';
   const storeAddress = store?.address || 'القاهرة — المهندسين، 42 شارع جامعة الدول العربية';
@@ -192,16 +194,20 @@ export function InvoiceCard({
               <img
                 src={rx.imageUrl}
                 alt="صورة روشتة كشف النظر"
-                className="h-20 w-auto rounded-lg border border-[#141413]/15 object-cover"
+                className="h-20 w-auto rounded-lg border border-[#141413]/15 object-cover cursor-pointer"
+                onClick={() =>
+                  setPreviewImage({ src: rx.imageUrl, title: `صورة كشف النظر — ${order.orderCode}` })
+                }
               />
-              <a
-                href={rx.imageUrl}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                onClick={() =>
+                  setPreviewImage({ src: rx.imageUrl, title: `صورة كشف النظر — ${order.orderCode}` })
+                }
                 className="no-print text-xs font-medium text-[#9A7B4F] underline"
               >
                 عرض صورة الكشف بالحجم الكامل
-              </a>
+              </button>
             </div>
           )}
         </div>
@@ -237,6 +243,47 @@ export function InvoiceCard({
             <Printer className="w-4 h-4" />
             <span>طباعة / حفظ الفاتورة PDF</span>
           </button>
+        </div>
+      )}
+      {previewImage && (
+        <div
+          className="no-print fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={previewImage.title}
+          onClick={() => setPreviewImage(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-2xl w-full p-4 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[#141413]/10 pb-2.5">
+              <h4 className="text-sm font-bold text-[#141413]">{previewImage.title}</h4>
+              <div className="flex items-center gap-2">
+                <a
+                  href={previewImage.src}
+                  download={`${order.orderCode || 'mido'}-image.jpg`}
+                  className="px-3 py-1.5 rounded-lg bg-[#F4F1EA] text-xs font-bold text-[#141413] inline-flex items-center gap-1"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>حفظ</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewImage(null)}
+                  aria-label="إغلاق المعاينة"
+                  className="p-1.5 rounded-lg bg-[#141413]/8 text-[#141413]"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <img
+              src={previewImage.src}
+              alt={previewImage.title}
+              className="w-full max-h-[75vh] object-contain rounded-xl bg-[#F7F6F2]"
+            />
+          </div>
         </div>
       )}
     </div>

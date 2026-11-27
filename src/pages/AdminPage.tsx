@@ -4,6 +4,7 @@ import {
   Box,
   Check,
   Cloud,
+  Download,
   ExternalLink,
   FileText,
   ImagePlus,
@@ -13,6 +14,7 @@ import {
   RefreshCw,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import { InvoiceCard } from '../components/InvoiceCard';
 import { SmartImage } from '../components/SmartImage';
@@ -36,6 +38,12 @@ import {
   syncCatalogToFirestore,
   updateFirestoreOrderStatus,
 } from '../lib/firestoreStore';
+import {
+  compressImageFileToDataUrl,
+  pickOrderItemImage,
+  pickPrescriptionImage,
+  resolvePortableImageUrl,
+} from '../lib/imageUtils';
 import { readJsonSafe } from '../lib/safeFetch';
 import { formatCurrencyEGP } from '../lib/storeLogic';
 import type {
@@ -96,6 +104,12 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
   const [invoiceOrder, setInvoiceOrder] = useState<OrderRecord | null>(null);
   const [confirmClearOrders, setConfirmClearOrders] = useState(false);
   const [deletingOrders, setDeletingOrders] = useState(false);
+  const [deletedCodes, setDeletedCodes] = useState<string[]>([]);
+  const [previewImage, setPreviewImage] = useState<{
+    src: string;
+    title: string;
+    filename?: string;
+  } | null>(null);
 
   // Product Form State
   const [editingProductId, setEditingProductId] = useState<number | null>(null);
@@ -153,12 +167,19 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
     Authorization: `Bearer ${t}`,
   });
 
-  const mergeOrders = (localList: OrderRecord[], cloudList: OrderRecord[]): OrderRecord[] => {
+  const mergeOrders = (
+    localList: OrderRecord[],
+    cloudList: OrderRecord[],
+    tombstones: string[] = deletedCodes,
+  ): OrderRecord[] => {
+    const blocked = new Set(tombstones.map((c) => c.toUpperCase()));
     const byCode = new Map<string, OrderRecord>();
     for (const o of cloudList) {
+      if (blocked.has(o.orderCode.toUpperCase())) continue;
       byCode.set(o.orderCode, { ...o, source: 'cloud' });
     }
     for (const o of localList) {
+      if (blocked.has(o.orderCode.toUpperCase())) continue;
       const existingCloud = byCode.get(o.orderCode);
       if (existingCloud) {
         byCode.set(o.orderCode, {
@@ -175,7 +196,10 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
     );
   };
 
-  const loadCloudData = async (localOrdersSnapshot?: OrderRecord[]) => {
+  const loadCloudData = async (
+    localOrdersSnapshot?: OrderRecord[],
+    tombstoneOverride?: string[],
+  ) => {
     try {
       const [cloudOrders, cloudProducts, cloudLenses, cloudStore] = await Promise.all([
         fetchFirestoreAdminOrders(),
@@ -183,7 +207,26 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
         fetchFirestoreAllLenses(),
         fetchFirestoreStoreSettings(),
       ]);
-      setOrders((prev) => mergeOrders(localOrdersSnapshot ?? prev.filter((o) => o.source !== 'cloud'), cloudOrders));
+      const effectiveTombstones = Array.from(
+        new Set([...deletedCodes, ...(tombstoneOverride ?? [])].map((c) => c.toUpperCase())),
+      );
+      const blockedSet = new Set(effectiveTombstones);
+      const strayCloudOrders = cloudOrders.filter((o) => blockedSet.has(o.orderCode.toUpperCase()));
+      if (strayCloudOrders.length > 0 && firebaseUser) {
+        void Promise.allSettled(
+          strayCloudOrders.map((o) => deleteFirestoreOrder(o.orderCode, o.firestoreDocId)),
+        );
+      }
+      const visibleCloudOrders = cloudOrders.filter(
+        (o) => !blockedSet.has(o.orderCode.toUpperCase()),
+      );
+      setOrders((prev) =>
+        mergeOrders(
+          localOrdersSnapshot ?? prev.filter((o) => o.source !== 'cloud'),
+          visibleCloudOrders,
+          effectiveTombstones,
+        ),
+      );
       if (!token) {
         if (cloudProducts.length > 0) setProducts(cloudProducts);
         if (cloudLenses.length > 0) setLenses(cloudLenses);
@@ -218,23 +261,26 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
 
   const loadAdminData = async (activeToken: string | null) => {
     let localOrders: OrderRecord[] = [];
+    let tombstoneList: string[] = deletedCodes;
     if (activeToken) {
       try {
-        const [prodRes, lensRes, ordRes, storeRes] = await Promise.all([
+        const [prodRes, lensRes, ordRes, storeRes, delRes] = await Promise.all([
           fetch('/api/admin/products', { headers: authHeaders(activeToken) }),
           fetch('/api/admin/lenses', { headers: authHeaders(activeToken) }),
           fetch('/api/admin/orders', { headers: authHeaders(activeToken) }),
           fetch('/api/store'),
+          fetch('/api/admin/deleted-orders', { headers: authHeaders(activeToken) }),
         ]);
         if (prodRes.status === 401) {
           setToken(null);
           return;
         }
-        const [prodParsed, lensParsed, ordParsed, storeParsed] = await Promise.all([
+        const [prodParsed, lensParsed, ordParsed, storeParsed, delParsed] = await Promise.all([
           readJsonSafe<Product[]>(prodRes),
           readJsonSafe<OpticalLens[]>(lensRes),
           readJsonSafe<OrderRecord[]>(ordRes),
           readJsonSafe<StoreSettings>(storeRes),
+          readJsonSafe<{ deletedOrderCodes?: string[] }>(delRes),
         ]);
         if (
           !prodParsed.isJson ||
@@ -246,8 +292,17 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
           setErrorMessage('تعذر تحميل بيانات لوحة التحكم من الخادم.');
           return;
         }
+        const serverTombstones = Array.isArray(delParsed.data?.deletedOrderCodes)
+          ? delParsed.data.deletedOrderCodes
+          : [];
+        tombstoneList = Array.from(new Set([...deletedCodes, ...serverTombstones]));
+        setDeletedCodes(tombstoneList);
+
         const storeData = storeParsed.data;
-        localOrders = Array.isArray(ordParsed.data) ? ordParsed.data : [];
+        const blockedSet = new Set(tombstoneList.map((c) => c.toUpperCase()));
+        localOrders = (Array.isArray(ordParsed.data) ? ordParsed.data : []).filter(
+          (o) => !blockedSet.has(o.orderCode.toUpperCase()),
+        );
         setProducts(Array.isArray(prodParsed.data) ? prodParsed.data : []);
         setLenses(Array.isArray(lensParsed.data) ? lensParsed.data : []);
         setOrders(localOrders.map((o) => ({ ...o, source: 'local' as const })));
@@ -268,7 +323,7 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
     }
 
     if (firebaseUser) {
-      await loadCloudData(localOrders);
+      await loadCloudData(localOrders, tombstoneList);
     }
   };
 
@@ -325,14 +380,31 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
         .split(/[،,]+/)
         .map((s) => s.trim())
         .filter(Boolean);
+      let serverTombstones: string[] = [];
+      if (token) {
+        try {
+          const delRes = await fetch('/api/admin/deleted-orders', {
+            headers: authHeaders(token),
+          });
+          const delParsed = await readJsonSafe<{ deletedOrderCodes?: string[] }>(delRes);
+          if (Array.isArray(delParsed.data?.deletedOrderCodes)) {
+            serverTombstones = delParsed.data.deletedOrderCodes;
+          }
+        } catch {
+          // ignore tombstone fetch errors during sync
+        }
+      }
+      const deletedOrderCodes = Array.from(new Set([...deletedCodes, ...serverTombstones]));
       const summary = await syncCatalogToFirestore({
         store: { ...storeForm, phones },
         products,
         lenses,
-        orders,
+        deletedOrderCodes,
       });
       setStatusMessage(
-        `تمت المزامنة إلى Firebase: ${summary.syncedProducts} منتج، ${summary.syncedLenses} عدسة، ${summary.syncedOrders} طلب جديد.`,
+        summary.cleanedOrders > 0
+          ? `تمت مزامنة المتجر والمنتجات والعدسات: ${summary.syncedProducts} منتج، ${summary.syncedLenses} عدسة (وتم تنظيف ${summary.cleanedOrders} طلب محذوف من السحابة).`
+          : `تمت مزامنة المتجر والمنتجات والعدسات: ${summary.syncedProducts} منتج، ${summary.syncedLenses} عدسة — دون إعادة رفع أي طلبات قديمة.`,
       );
       onDataUpdated();
     } catch (err) {
@@ -347,7 +419,18 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
   };
 
   const uploadAdminImage = async (file: File): Promise<string | null> => {
-    if (!token) return null;
+    try {
+      // Compress into a self-contained portable data URI so images render reliably
+      // across both this site, Vercel storefront, and the external admin dashboard.
+      const portableDataUrl = await compressImageFileToDataUrl(file, 960, 0.72);
+      if (portableDataUrl) return portableDataUrl;
+    } catch {
+      // Fall back to server disk upload below if canvas compression is unavailable
+    }
+    if (!token) {
+      setErrorMessage('تعذر معالجة الصورة محلياً؛ جرب صورة JPG أو PNG أصغر حجماً.');
+      return null;
+    }
     const form = new FormData();
     form.append('image', file);
     const res = await fetch('/api/admin/upload', {
@@ -683,10 +766,16 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
     if (!token && !firebaseUser) return;
     setErrorMessage('');
     setStatusMessage('');
+    if (!firebaseUser && (order.source === 'cloud' || order.source === 'both')) {
+      setErrorMessage(
+        'لحذف الطلبات السحابية نهائياً من Firebase والموقع الثاني، اضغط أولاً على «ربط حساب Firebase (Google)» بالأعلى.',
+      );
+      return;
+    }
     setDeletingOrders(true);
     try {
-      if (token && order.source !== 'cloud') {
-        await fetch(`/api/admin/orders/${order.id}`, {
+      if (token) {
+        await fetch(`/api/admin/orders/${encodeURIComponent(order.orderCode)}`, {
           method: 'DELETE',
           headers: authHeaders(token),
         });
@@ -694,10 +783,18 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       if (firebaseUser) {
         await deleteFirestoreOrder(order.orderCode, order.firestoreDocId);
       }
+      setDeletedCodes((prev) => Array.from(new Set([...prev, order.orderCode])));
+      setOrders((prev) => prev.filter((o) => o.orderCode !== order.orderCode));
       if (invoiceOrder?.orderCode === order.orderCode) {
         setInvoiceOrder(null);
       }
-      setStatusMessage(`تم حذف الطلب ${order.orderCode} نهائياً.`);
+      if (!firebaseUser) {
+        setStatusMessage(
+          `تم حذف الطلب ${order.orderCode} من الخادم المحلي. إذا ظهر مجدداً من السحابة، سجل الدخول بحساب Google ثم احذفه سحابياً.`,
+        );
+      } else {
+        setStatusMessage(`تم حذف الطلب ${order.orderCode} نهائياً من جميع القواعد ولن يعود مع المزامنة.`);
+      }
       await loadAdminData(token);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'تعذر حذف الطلب.');
@@ -710,8 +807,16 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
     if (!token && !firebaseUser) return;
     setErrorMessage('');
     setStatusMessage('');
+    const hasCloudOrders = orders.some((o) => o.source === 'cloud' || o.source === 'both');
+    if (!firebaseUser && hasCloudOrders) {
+      setErrorMessage(
+        'توجد طلبات سحابية (Firebase). اضغط أولاً على «ربط حساب Firebase (Google)» بالأعلى ليتم مسحها نهائياً من جميع القواعد.',
+      );
+      return;
+    }
     setDeletingOrders(true);
     try {
+      const removedCodes = orders.map((o) => o.orderCode);
       if (token) {
         await fetch('/api/admin/orders', {
           method: 'DELETE',
@@ -721,10 +826,11 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       if (firebaseUser) {
         await deleteAllFirestoreOrders();
       }
+      setDeletedCodes((prev) => Array.from(new Set([...prev, ...removedCodes])));
       setInvoiceOrder(null);
       setConfirmClearOrders(false);
       setOrders([]);
-      setStatusMessage('تم مسح جميع الطلبات بنجاح ويمكنك البدء الآن على نظافة.');
+      setStatusMessage('تم مسح جميع الطلبات نهائياً ولن تعود عند الضغط على المزامنة.');
       await loadAdminData(token);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'تعذر مسح جميع الطلبات.');
@@ -1691,7 +1797,11 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
                 {/* Items with Frame Photo (صورة الشمبر) */}
                 <div className="space-y-2.5 text-xs text-[#4A4843]">
                   {order.items.map((item) => {
-                    const frameImg = item.imageUrl || item.frameImageUrl || '';
+                    const frameImg = resolvePortableImageUrl(
+                      pickOrderItemImage(item as unknown as Record<string, unknown>) ||
+                        order.frameImageUrl ||
+                        '',
+                    );
                     return (
                       <div
                         key={item.id}
@@ -1699,13 +1809,23 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           {frameImg && (
-                            <div className="w-16 h-12 rounded-lg overflow-hidden bg-[#ECEAE3] border border-[#141413]/12 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewImage({
+                                  src: frameImg,
+                                  title: `صورة الشمبر — ${item.productName} (${item.colorName})`,
+                                  filename: `${order.orderCode || 'mido'}-frame.jpg`,
+                                })
+                              }
+                              className="w-16 h-12 rounded-lg overflow-hidden bg-[#ECEAE3] border border-[#141413]/12 shrink-0 cursor-pointer"
+                            >
                               <SmartImage
                                 src={frameImg}
                                 alt={item.productName}
                                 className="w-full h-full object-cover"
                               />
-                            </div>
+                            </button>
                           )}
                           <div className="space-y-0.5 min-w-0">
                             <div className="font-bold text-[#141413] flex items-center gap-1.5 flex-wrap">
@@ -1728,14 +1848,19 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
 
                         <div className="flex items-center gap-3">
                           {frameImg && (
-                            <a
-                              href={frameImg}
-                              target="_blank"
-                              rel="noreferrer"
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewImage({
+                                  src: frameImg,
+                                  title: `صورة الشمبر — ${item.productName} (${item.colorName})`,
+                                  filename: `${order.orderCode || 'mido'}-frame.jpg`,
+                                })
+                              }
                               className="text-[11px] font-medium text-[#9A7B4F] underline whitespace-nowrap"
                             >
                               عرض صورة الشمبر
-                            </a>
+                            </button>
                           )}
                           <span className="font-mono tabular-nums font-bold text-[#141413]">
                             {formatCurrencyEGP((item.framePrice + item.lensPrice) * item.quantity)}
@@ -1747,47 +1872,74 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
                 </div>
 
                 {/* Prescription Info */}
-                {order.prescription && (
-                  <div className="p-3.5 rounded-xl bg-[#F7F6F2] border border-[#141413]/10 space-y-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-[#141413]">كشف النظر المرفق:</span>
-                      {order.prescription.ipd && (
-                        <span className="font-mono font-bold text-[#141413]" dir="ltr">
-                          IPD: {order.prescription.ipd} mm
-                        </span>
+                {order.prescription && (() => {
+                  const rxImg = resolvePortableImageUrl(
+                    pickPrescriptionImage(
+                      order.prescription as unknown as Record<string, unknown>,
+                      order.prescriptionImageUrl,
+                    ),
+                  );
+                  return (
+                    <div className="p-3.5 rounded-xl bg-[#F7F6F2] border border-[#141413]/10 space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-[#141413]">كشف النظر المرفق:</span>
+                        {order.prescription.ipd && (
+                          <span className="font-mono font-bold text-[#141413]" dir="ltr">
+                            IPD: {order.prescription.ipd} mm
+                          </span>
+                        )}
+                      </div>
+                      {(order.prescription.od.sph ||
+                        order.prescription.os.sph ||
+                        order.prescription.od.add ||
+                        order.prescription.os.add) && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono" dir="ltr">
+                          <div>
+                            OD (Right): SPH {order.prescription.od.sph || '-'} | CYL{' '}
+                            {order.prescription.od.cyl || '-'} | AXIS{' '}
+                            {order.prescription.od.axis || '-'} | ADD{' '}
+                            {order.prescription.od.add || '-'}
+                          </div>
+                          <div>
+                            OS (Left): SPH {order.prescription.os.sph || '-'} | CYL{' '}
+                            {order.prescription.os.cyl || '-'} | AXIS{' '}
+                            {order.prescription.os.axis || '-'} | ADD{' '}
+                            {order.prescription.os.add || '-'}
+                          </div>
+                        </div>
+                      )}
+                      {rxImg && (
+                        <div className="flex flex-wrap items-center gap-3 pt-1">
+                          <img
+                            src={rxImg}
+                            alt="صورة روشتة كشف النظر"
+                            onClick={() =>
+                              setPreviewImage({
+                                src: rxImg,
+                                title: `صورة كشف النظر — ${order.orderCode}`,
+                                filename: `${order.orderCode || 'mido'}-prescription.jpg`,
+                              })
+                            }
+                            className="h-16 w-auto rounded-lg border border-[#141413]/15 object-cover cursor-pointer"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewImage({
+                                src: rxImg,
+                                title: `صورة كشف النظر — ${order.orderCode}`,
+                                filename: `${order.orderCode || 'mido'}-prescription.jpg`,
+                              })
+                            }
+                            className="text-[#9A7B4F] underline font-medium"
+                          >
+                            عرض صورة روشتة كشف النظر
+                          </button>
+                        </div>
                       )}
                     </div>
-                    {(order.prescription.od.sph ||
-                      order.prescription.os.sph ||
-                      order.prescription.od.add ||
-                      order.prescription.os.add) && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono" dir="ltr">
-                        <div>
-                          OD (Right): SPH {order.prescription.od.sph || '-'} | CYL{' '}
-                          {order.prescription.od.cyl || '-'} | AXIS{' '}
-                          {order.prescription.od.axis || '-'} | ADD{' '}
-                          {order.prescription.od.add || '-'}
-                        </div>
-                        <div>
-                          OS (Left): SPH {order.prescription.os.sph || '-'} | CYL{' '}
-                          {order.prescription.os.cyl || '-'} | AXIS{' '}
-                          {order.prescription.os.axis || '-'} | ADD{' '}
-                          {order.prescription.os.add || '-'}
-                        </div>
-                      </div>
-                    )}
-                    {order.prescription.imageUrl && (
-                      <a
-                        href={order.prescription.imageUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-block text-[#9A7B4F] underline font-medium"
-                      >
-                        فتح صورة روشتة كشف النظر
-                      </a>
-                    )}
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             ))
           )}
@@ -2122,7 +2274,7 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
               <div>PUT  /api/external/store</div>
               <div>GET  /api/external/products | POST | PUT /:id | DELETE /:id</div>
               <div>GET  /api/external/lenses   | POST | PUT /:id | DELETE /:id</div>
-              <div>GET  /api/external/orders   | PATCH /api/external/orders/:id/status</div>
+              <div>GET  /api/external/orders   | PATCH /:id/status | DELETE /:id | DELETE /api/external/orders</div>
               <div className="pt-2 text-[#6E6B64]">
                 Header: x-mido-sync-secret (or Authorization: Bearer ...)
               </div>
@@ -2130,6 +2282,48 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
                 Webhook Target (Server Env): EXTERNAL_ADMIN_WEBHOOK_URL
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {previewImage && (
+        <div
+          className="no-print fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={previewImage.title}
+          onClick={() => setPreviewImage(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-2xl w-full p-4 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[#141413]/10 pb-2.5">
+              <h4 className="text-sm font-bold text-[#141413]">{previewImage.title}</h4>
+              <div className="flex items-center gap-2">
+                <a
+                  href={previewImage.src}
+                  download={previewImage.filename || 'mido-image.jpg'}
+                  className="px-3 py-1.5 rounded-lg bg-[#F4F1EA] text-xs font-bold text-[#141413] inline-flex items-center gap-1"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>حفظ</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewImage(null)}
+                  aria-label="إغلاق المعاينة"
+                  className="p-1.5 rounded-lg bg-[#141413]/8 text-[#141413]"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <img
+              src={previewImage.src}
+              alt={previewImage.title}
+              className="w-full max-h-[75vh] object-contain rounded-xl bg-[#F7F6F2]"
+            />
           </div>
         </div>
       )}
