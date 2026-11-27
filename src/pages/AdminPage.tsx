@@ -239,15 +239,24 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
         if (cloudProducts.length > 0) setProducts(cloudProducts);
         if (cloudLenses.length > 0) setLenses(cloudLenses);
         if (cloudStore && cloudStore.storeName) {
-          setStoreForm({
+          setStoreForm((previous) => ({
+            ...(previous || cloudStore),
             ...cloudStore,
             storyBeats:
               cloudStore.storyBeats && cloudStore.storyBeats.length > 0
                 ? cloudStore.storyBeats
-                : [DEFAULT_BEAT],
-            heroModelUrl: cloudStore.heroModelUrl || '',
-            externalAdminUrl: cloudStore.externalAdminUrl || '',
-          });
+                : previous?.storyBeats || [DEFAULT_BEAT],
+            heroModelUrl: cloudStore.heroModelUrl || previous?.heroModelUrl || '',
+            externalAdminUrl: cloudStore.externalAdminUrl || previous?.externalAdminUrl || '',
+            heroTitle: cloudStore.heroTitle ?? previous?.heroTitle,
+            heroImageUrl: cloudStore.heroImageUrl ?? previous?.heroImageUrl,
+            aboutTitle: cloudStore.aboutTitle ?? previous?.aboutTitle,
+            featuredTitle: cloudStore.featuredTitle ?? previous?.featuredTitle,
+            featuredSubtitle: cloudStore.featuredSubtitle ?? previous?.featuredSubtitle,
+            locationTitle: cloudStore.locationTitle ?? previous?.locationTitle,
+            locationText: cloudStore.locationText ?? previous?.locationText,
+            homeDepartments: cloudStore.homeDepartments ?? previous?.homeDepartments,
+          }));
           setPhonesText((cloudStore.phones || []).join('، '));
         }
       }

@@ -180,13 +180,14 @@ const uploadModel = multer({
 const categorySchema = z.enum(['prescription', 'sunglasses', 'contact_lenses', 'accessories']);
 
 const variantInputSchema = z.object({
+  id: z.number().int().positive().optional(),
   colorName: z.string().trim().min(1).max(80),
   colorHex: z
     .string()
     .trim()
     .regex(/^#[0-9a-fA-F]{3,8}$/),
   stock: z.number().int().min(0).max(10000),
-  images: z.array(z.string().trim().min(1)).min(1),
+  images: z.array(z.string().trim().min(1).max(450_000)).min(1).max(5),
 });
 
 const productInputSchema = z.object({
@@ -209,7 +210,7 @@ const lensInputSchema = z.object({
   name: z.string().trim().min(2).max(140),
   subtitle: z.string().trim().min(2).max(240),
   price: z.number().min(0).max(100000),
-  imageUrl: z.string().trim().min(1),
+  imageUrl: z.string().trim().min(1).max(450_000),
   details: z.array(z.string().trim().min(1)).min(1),
   fullDescription: z.string().trim().min(2).max(1500),
   refractiveIndex: z.string().trim().min(1).max(60).default('1.56'),
@@ -262,6 +263,14 @@ const storyBeatSchema = z.object({
   body: z.string().trim().min(4).max(600),
 });
 
+const homeDepartmentSchema = z.object({
+  id: z.string().trim().min(1).max(60).regex(/^[a-zA-Z0-9_-]+$/),
+  title: z.string().trim().min(2).max(100),
+  subtitle: z.string().trim().max(240),
+  page: z.enum(['optical', 'sunglasses', 'contacts', 'accessories']),
+  imageUrl: z.string().trim().max(100_000),
+});
+
 const storeSettingsSchema = z.object({
   storeName: z.string().trim().min(2).max(140),
   tagline: z.string().trim().min(2).max(240),
@@ -274,6 +283,14 @@ const storeSettingsSchema = z.object({
   whatsapp: z.string().trim().max(30),
   workingHours: z.string().trim().min(3).max(200),
   externalAdminUrl: z.string().trim().max(300).optional().default(''),
+  heroTitle: z.string().trim().max(180).optional(),
+  heroImageUrl: z.string().trim().max(300_000).optional(),
+  aboutTitle: z.string().trim().max(140).optional(),
+  featuredTitle: z.string().trim().max(140).optional(),
+  featuredSubtitle: z.string().trim().max(300).optional(),
+  locationTitle: z.string().trim().max(140).optional(),
+  locationText: z.string().trim().max(1000).optional(),
+  homeDepartments: z.array(homeDepartmentSchema).max(6).optional(),
 });
 
 function slugifyAscii(input: string): string {
@@ -1255,7 +1272,8 @@ async function startServer() {
       UPDATE store_settings
       SET store_name = ?, tagline = ?, about_text = ?, story_beats_json = ?,
           hero_model_url = ?, address = ?, map_link = ?, phones_json = ?,
-          whatsapp = ?, working_hours = ?, external_admin_url = ?, updated_at = datetime('now')
+          whatsapp = ?, working_hours = ?, external_admin_url = ?, home_content_json = ?,
+          updated_at = datetime('now')
       WHERE id = 1
     `).run(
       s.storeName,
@@ -1269,6 +1287,16 @@ async function startServer() {
       s.whatsapp,
       s.workingHours,
       s.externalAdminUrl || '',
+      JSON.stringify({
+        heroTitle: s.heroTitle ?? current.heroTitle ?? '',
+        heroImageUrl: s.heroImageUrl ?? current.heroImageUrl ?? '',
+        aboutTitle: s.aboutTitle ?? current.aboutTitle ?? '',
+        featuredTitle: s.featuredTitle ?? current.featuredTitle ?? '',
+        featuredSubtitle: s.featuredSubtitle ?? current.featuredSubtitle ?? '',
+        locationTitle: s.locationTitle ?? current.locationTitle ?? '',
+        locationText: s.locationText ?? current.locationText ?? '',
+        homeDepartments: s.homeDepartments ?? current.homeDepartments,
+      }),
     );
     res.json(getStoreSettings());
   });
@@ -1290,7 +1318,8 @@ async function startServer() {
       UPDATE store_settings
       SET store_name = ?, tagline = ?, about_text = ?, story_beats_json = ?,
           hero_model_url = ?, address = ?, map_link = ?, phones_json = ?,
-          whatsapp = ?, working_hours = ?, external_admin_url = ?, updated_at = datetime('now')
+          whatsapp = ?, working_hours = ?, external_admin_url = ?, home_content_json = ?,
+          updated_at = datetime('now')
       WHERE id = 1
     `).run(
       s.storeName,
@@ -1304,6 +1333,16 @@ async function startServer() {
       s.whatsapp,
       s.workingHours,
       s.externalAdminUrl || '',
+      JSON.stringify({
+        heroTitle: s.heroTitle ?? current.heroTitle ?? '',
+        heroImageUrl: s.heroImageUrl ?? current.heroImageUrl ?? '',
+        aboutTitle: s.aboutTitle ?? current.aboutTitle ?? '',
+        featuredTitle: s.featuredTitle ?? current.featuredTitle ?? '',
+        featuredSubtitle: s.featuredSubtitle ?? current.featuredSubtitle ?? '',
+        locationTitle: s.locationTitle ?? current.locationTitle ?? '',
+        locationText: s.locationText ?? current.locationText ?? '',
+        homeDepartments: s.homeDepartments ?? current.homeDepartments,
+      }),
     );
     res.json(getStoreSettings());
   });
@@ -1324,13 +1363,14 @@ async function startServer() {
       const result = db
         .prepare(`
           INSERT INTO products (
-            slug, name, category, price, short_desc, full_desc, frame_shape,
+            slug, external_key, name, category, price, short_desc, full_desc, frame_shape,
             material, dimensions, published, allow_preorder, preorder_note
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .run(
           slug,
+          '',
           p.name,
           p.category,
           p.price,
@@ -1357,9 +1397,9 @@ async function startServer() {
   });
 
   app.put('/api/external/products/:id', requireExternalSyncAuth, (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
-      res.status(400).json({ error: 'Invalid product id' });
+    const key = decodeURIComponent(String(req.params.id || '')).trim().slice(0, 140);
+    if (!/^[a-zA-Z0-9_-]+$/.test(key)) {
+      res.status(400).json({ error: 'Invalid product key' });
       return;
     }
     const parsed = productInputSchema.safeParse(req.body);
@@ -1367,13 +1407,37 @@ async function startServer() {
       res.status(400).json({ error: 'Invalid product payload' });
       return;
     }
-    const existing = db.prepare('SELECT id FROM products WHERE id = ?').get(id);
-    if (!existing) {
+    const id = Number(key);
+    const existing = Number.isInteger(id) && id > 0
+      ? db.prepare('SELECT id FROM products WHERE id = ?').get(id) as { id: number } | undefined
+      : db.prepare('SELECT id FROM products WHERE external_key = ? OR slug = ?').get(key, key) as { id: number } | undefined;
+    if (!existing && Number.isInteger(id) && id > 0) {
       res.status(404).json({ error: 'Product not found' });
       return;
     }
     const p = parsed.data;
-    db.transaction(() => {
+    const productId = db.transaction(() => {
+      if (!existing) {
+        const result = db.prepare(`
+          INSERT INTO products (
+            slug, external_key, name, category, price, short_desc, full_desc, frame_shape,
+            material, dimensions, published, allow_preorder, preorder_note
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          slugifyAscii(p.name), key, p.name, p.category, p.price, p.shortDesc, p.fullDesc,
+          p.frameShape, p.material, p.dimensions, p.published ? 1 : 0,
+          p.allowPreorder ? 1 : 0, p.preorderNote || '',
+        );
+        const newId = Number(result.lastInsertRowid);
+        const insertVariant = db.prepare(`
+          INSERT INTO product_variants (product_id, color_name, color_hex, stock, images_json, sort_order)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        p.variants.forEach((variant, index) => {
+          insertVariant.run(newId, variant.colorName, variant.colorHex, variant.stock, JSON.stringify(variant.images), index);
+        });
+        return newId;
+      }
       db.prepare(`
         UPDATE products
         SET name = ?, category = ?, price = ?, short_desc = ?, full_desc = ?,
@@ -1392,27 +1456,50 @@ async function startServer() {
         p.published ? 1 : 0,
         p.allowPreorder ? 1 : 0,
         p.preorderNote || '',
-        id,
+        existing.id,
       );
-      db.prepare('DELETE FROM product_variants WHERE product_id = ?').run(id);
-      const insertVar = db.prepare(`
+      const existingVariants = db.prepare(
+        'SELECT id, color_name FROM product_variants WHERE product_id = ?'
+      ).all(existing.id) as Array<{ id: number; color_name: string }>;
+      const usedVariantIds: number[] = [];
+      const updateVariant = db.prepare(`
+        UPDATE product_variants
+        SET color_name = ?, color_hex = ?, stock = ?, images_json = ?, sort_order = ?
+        WHERE id = ? AND product_id = ?
+      `);
+      const insertVariant = db.prepare(`
         INSERT INTO product_variants (product_id, color_name, color_hex, stock, images_json, sort_order)
         VALUES (?, ?, ?, ?, ?, ?)
       `);
-      p.variants.forEach((v, idx) => {
-        insertVar.run(id, v.colorName, v.colorHex, v.stock, JSON.stringify(v.images), idx);
-      });
+      for (const [index, variant] of p.variants.entries()) {
+        const matched = existingVariants.find((candidate) =>
+          !usedVariantIds.includes(candidate.id) &&
+          (candidate.id === variant.id || candidate.color_name.toLowerCase() === variant.colorName.toLowerCase())
+        );
+        if (matched) {
+          updateVariant.run(variant.colorName, variant.colorHex, variant.stock, JSON.stringify(variant.images), index, matched.id, existing.id);
+          usedVariantIds.push(matched.id);
+        } else {
+          const result = insertVariant.run(existing.id, variant.colorName, variant.colorHex, variant.stock, JSON.stringify(variant.images), index);
+          usedVariantIds.push(Number(result.lastInsertRowid));
+        }
+      }
+      db.prepare(`DELETE FROM product_variants WHERE product_id = ? AND id NOT IN (${usedVariantIds.map(() => '?').join(',')})`)
+        .run(existing.id, ...usedVariantIds);
+      return existing.id;
     })();
-    res.json({ ok: true });
+    res.json({ ok: true, id: productId });
   });
 
   app.delete('/api/external/products/:id', requireExternalSyncAuth, (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
-      res.status(400).json({ error: 'Invalid product id' });
+    const key = decodeURIComponent(String(req.params.id || '')).trim().slice(0, 140);
+    if (!/^[a-zA-Z0-9_-]+$/.test(key)) {
+      res.status(400).json({ error: 'Invalid product key' });
       return;
     }
-    db.prepare('DELETE FROM products WHERE id = ?').run(id);
+    const id = Number(key);
+    if (Number.isInteger(id) && id > 0) db.prepare('DELETE FROM products WHERE id = ?').run(id);
+    else db.prepare('DELETE FROM products WHERE external_key = ? OR slug = ?').run(key, key);
     res.json({ ok: true });
   });
 
@@ -1446,45 +1533,79 @@ async function startServer() {
   });
 
   app.put('/api/external/lenses/:id', requireExternalSyncAuth, (req, res) => {
-    const id = Number(req.params.id);
+    const key = decodeURIComponent(String(req.params.id || '')).trim().slice(0, 140);
     const parsed = lensInputSchema.safeParse(req.body);
-    if (!Number.isInteger(id) || id <= 0 || !parsed.success) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(key) || !parsed.success) {
       res.status(400).json({ error: 'Invalid lens payload' });
       return;
     }
     const l = parsed.data;
+    const numericId = Number(key);
+    const existing = Number.isInteger(numericId) && numericId > 0
+      ? db.prepare('SELECT id FROM lenses WHERE id = ?').get(numericId) as { id: number } | undefined
+      : db.prepare('SELECT id FROM lenses WHERE external_key = ?').get(key) as { id: number } | undefined;
+    if (!existing && Number.isInteger(numericId) && numericId > 0) {
+      res.status(404).json({ error: 'Lens not found' });
+      return;
+    }
+    if (!existing) {
+      const result = db.prepare(`
+        INSERT INTO lenses (external_key, name, subtitle, price, image_url, details_json, full_description, refractive_index, published, sort_order)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      `).run(key, l.name, l.subtitle, l.price, l.imageUrl, JSON.stringify(l.details), l.fullDescription, l.refractiveIndex, l.published ? 1 : 0);
+      res.json({ ok: true, id: Number(result.lastInsertRowid) });
+      return;
+    }
     db.prepare(`
       UPDATE lenses
       SET name = ?, subtitle = ?, price = ?, image_url = ?, details_json = ?,
           full_description = ?, refractive_index = ?, published = ?
       WHERE id = ?
-    `).run(
-      l.name,
-      l.subtitle,
-      l.price,
-      l.imageUrl,
-      JSON.stringify(l.details),
-      l.fullDescription,
-      l.refractiveIndex,
-      l.published ? 1 : 0,
-      id,
-    );
-    res.json({ ok: true });
+    `).run(l.name, l.subtitle, l.price, l.imageUrl, JSON.stringify(l.details), l.fullDescription, l.refractiveIndex, l.published ? 1 : 0, existing.id);
+    res.json({ ok: true, id: existing.id });
   });
 
   app.delete('/api/external/lenses/:id', requireExternalSyncAuth, (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
-      res.status(400).json({ error: 'Invalid lens id' });
+    const key = decodeURIComponent(String(req.params.id || '')).trim().slice(0, 140);
+    if (!/^[a-zA-Z0-9_-]+$/.test(key)) {
+      res.status(400).json({ error: 'Invalid lens key' });
       return;
     }
-    db.prepare('DELETE FROM lenses WHERE id = ?').run(id);
+    const id = Number(key);
+    if (Number.isInteger(id) && id > 0) db.prepare('DELETE FROM lenses WHERE id = ?').run(id);
+    else db.prepare('DELETE FROM lenses WHERE external_key = ?').run(key);
     res.json({ ok: true });
   });
 
   app.get('/api/external/orders', requireExternalSyncAuth, (req, res) => {
     const host = req.header('host');
-    res.json(listOrders().map((o) => enrichOrderForExternal(o, host)));
+    const deletedCodes = new Set(listDeletedOrderCodes().map((code) => String(code).trim().toUpperCase()));
+    res.json(
+      listOrders()
+        .filter((order) => !deletedCodes.has(String(order.orderCode || '').trim().toUpperCase()))
+        .map((order) => enrichOrderForExternal(order, host)),
+    );
+  });
+
+  app.get('/api/external/deleted-orders', requireExternalSyncAuth, (_req, res) => {
+    res.json({ deletedOrderCodes: listDeletedOrderCodes() });
+  });
+
+  app.post('/api/external/deleted-orders', requireExternalSyncAuth, (req, res) => {
+    const parsed = z.object({
+      orderCodes: z.array(z.string().trim().min(1).max(64)).max(200),
+    }).safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid deleted-order list' });
+      return;
+    }
+    const deletedCodes = Array.from(new Set(parsed.data.orderCodes.map((code) => code.trim().toUpperCase())));
+    recordDeletedOrderCodes(deletedCodes);
+    const deleteOrder = db.prepare('DELETE FROM orders WHERE UPPER(order_code) = ?');
+    db.transaction(() => {
+      for (const orderCode of deletedCodes) deleteOrder.run(orderCode);
+    })();
+    res.json({ ok: true, deletedOrderCodes: listDeletedOrderCodes() });
   });
 
   app.patch('/api/external/orders/:id/status', requireExternalSyncAuth, (req, res) => {
@@ -1513,7 +1634,10 @@ async function startServer() {
         ? db.prepare('SELECT id, order_code FROM orders WHERE id = ? OR order_code = ?').all(numericId, rawId)
         : db.prepare('SELECT id, order_code FROM orders WHERE order_code = ?').all(rawId)
     ) as Array<{ id: number; order_code: string }>;
-    recordDeletedOrderCodes(matching.map((m) => m.order_code));
+    recordDeletedOrderCodes([
+      ...matching.map((m) => m.order_code),
+      ...(Number.isInteger(numericId) && numericId > 0 ? [] : [rawId]),
+    ]);
     if (Number.isInteger(numericId) && numericId > 0) {
       db.prepare('DELETE FROM orders WHERE id = ? OR order_code = ?').run(numericId, rawId);
     } else {

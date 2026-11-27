@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Clock, MapPin, MessageCircle, Phone } from 'lucide-react';
 import { GlassesHero3D } from '../components/GlassesHero3D';
 import { SmartImage } from '../components/SmartImage';
-import type { Product, StoreSettings, StoryBeat } from '../types';
+import type { HomeDepartment, Product, StoreSettings, StoryBeat } from '../types';
 import type { AppRoute } from '../components/Navbar';
 import { formatCurrencyEGP } from '../lib/storeLogic';
 
@@ -30,35 +30,34 @@ const FALLBACK_STORY_BEATS: StoryBeat[] = [
   },
 ];
 
-const DEPARTMENTS: Array<{
-  title: string;
-  subtitle: string;
-  page: AppRoute['page'];
-  image: string;
-}> = [
+const DEPARTMENTS: HomeDepartment[] = [
   {
+    id: 'optical',
     title: 'النظارات الطبية',
     subtitle: 'اختيار الإطار، تجربة الكاميرا، وتحديد نوع العدسة وكشف النظر.',
     page: 'optical',
-    image: '/src/assets/images/optical_tortoise_gold_1795761229680.jpg',
+    imageUrl: '/src/assets/images/optical_tortoise_gold_1795761229680.jpg',
   },
   {
+    id: 'sunglasses',
     title: 'النظارات الشمسية',
     subtitle: 'حماية UV400 وعدسات بولارايزد مع شراء مباشر عند الاستلام.',
     page: 'sunglasses',
-    image: '/src/assets/images/sun_havana_amber_1795761231607.jpg',
+    imageUrl: '/src/assets/images/sun_havana_amber_1795761231607.jpg',
   },
   {
+    id: 'contacts',
     title: 'العدسات اللاصقة',
     subtitle: 'عدسات يومية وشهرية طبية وتجميلية مريحة طوال اليوم.',
     page: 'contacts',
-    image: '/src/assets/images/contact_lenses_pack_1795761232288.jpg',
+    imageUrl: '/src/assets/images/contact_lenses_pack_1795761232288.jpg',
   },
   {
+    id: 'accessories',
     title: 'الإكسسوارات',
     subtitle: 'جرابات جلدية فاخرة، بخاخات تنظيف، ومناديل مايكروفايبر.',
     page: 'accessories',
-    image: '/src/assets/images/eyewear_accessories_kit_1795761232213.jpg',
+    imageUrl: '/src/assets/images/eyewear_accessories_kit_1795761232213.jpg',
   },
 ];
 
@@ -71,6 +70,7 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
     store.storyBeats && store.storyBeats.length > 0
       ? store.storyBeats
       : FALLBACK_STORY_BEATS;
+  const departments = store.homeDepartments ?? DEPARTMENTS;
 
   useEffect(() => {
     const updateScroll = () => {
@@ -127,9 +127,9 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
       {/* Section 1: Apple-Style Scroll-Driven 3D Eyewear + Editable Store Story Beats */}
       <section
         ref={scrollyRef}
-        className="mido-hero max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-10 lg:min-h-[235vh]"
+        className={`mido-hero max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-10 ${store.heroImageUrl ? '' : 'lg:min-h-[235vh]'}`}
       >
-        <div className="mido-hero-grid grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-start lg:sticky lg:top-20">
+        <div className={`mido-hero-grid grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-start ${store.heroImageUrl ? '' : 'lg:sticky lg:top-20'}`}>
           {/* Store Intro + Dynamic Story Beat Column */}
           <div className="lg:col-span-5 space-y-6 lg:pt-4">
             <div className="space-y-3">
@@ -137,7 +137,7 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
                 {store.storeName} <span aria-hidden="true">·</span> بصريات بتفاصيل أدق
               </p>
               <h1 className="mido-hero-title text-4xl sm:text-5xl lg:text-7xl font-bold text-[#18251F] leading-[1.1] text-balance">
-                رؤية واضحة بتصميم يليق بملامحك
+                {store.heroTitle || 'رؤية واضحة بتصميم يليق بملامحك'}
               </h1>
               <p className="max-w-xl text-base sm:text-lg text-[#4A4843] leading-relaxed">
                 {store.tagline}
@@ -202,10 +202,20 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
 
           {/* Sticky 3D Stage */}
           <div className="mido-stage-wrap lg:col-span-7">
-            <GlassesHero3D
-              scrollProgress={effectiveProgress}
-              heroModelUrl={store.heroModelUrl}
-            />
+            {store.heroImageUrl ? (
+              <div className="aspect-[4/3] overflow-hidden rounded-[2rem] border border-[#141413]/10 bg-[#ECEAE3] shadow-xl">
+                <SmartImage
+                  src={store.heroImageUrl}
+                  alt={store.storeName}
+                  className="h-full w-full object-cover"
+                />
+              </div>
+            ) : (
+              <GlassesHero3D
+                scrollProgress={effectiveProgress}
+                heroModelUrl={store.heroModelUrl}
+              />
+            )}
           </div>
         </div>
       </section>
@@ -214,7 +224,9 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="border-t border-[#141413]/10 pt-14 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start mb-12">
           <div className="lg:col-span-4">
-            <h2 className="text-2xl sm:text-3xl font-bold text-[#141413]">عن المحل ورؤيتنا</h2>
+            <h2 className="text-2xl sm:text-3xl font-bold text-[#141413]">
+              {store.aboutTitle || 'عن المحل ورؤيتنا'}
+            </h2>
           </div>
           <div className="lg:col-span-8 space-y-5">
             <p className="text-base sm:text-lg text-[#4A4843] leading-relaxed max-w-3xl">
@@ -238,20 +250,22 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {DEPARTMENTS.map((dept) => (
+          {departments.map((dept) => (
             <button
-              key={dept.page}
+              key={dept.id}
               type="button"
-              onClick={() => onNavigate({ page: dept.page } as AppRoute)}
+              onClick={() => onNavigate({ page: dept.page })}
               className="home-category-card group text-right bg-white rounded-2xl border border-[#141413]/10 overflow-hidden transition-transform duration-200 hover:-translate-y-1 flex flex-col"
             >
-              <div className="aspect-[4/3] w-full overflow-hidden bg-[#ECEAE3]">
-                <SmartImage
-                  src={dept.image}
-                  alt={dept.title}
-                  className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                />
-              </div>
+              {dept.imageUrl && (
+                <div className="aspect-[4/3] w-full overflow-hidden bg-[#ECEAE3]">
+                  <SmartImage
+                    src={dept.imageUrl}
+                    alt={dept.title}
+                    className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                  />
+                </div>
+              )}
               <div className="p-5 flex-1 flex flex-col justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-bold text-[#141413] mb-1.5">{dept.title}</h3>
@@ -272,9 +286,11 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
         <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-end justify-between gap-4 mb-8">
             <div>
-              <h2 className="text-2xl sm:text-3xl font-bold text-[#141413]">إصدارات مختارة</h2>
+              <h2 className="text-2xl sm:text-3xl font-bold text-[#141413]">
+                {store.featuredTitle || 'إصدارات مختارة'}
+              </h2>
               <p className="text-sm text-[#6E6B64] mt-1">
-                تشكيلة منتقاة من أحدث الإطارات الطبية والشمسية
+                {store.featuredSubtitle || 'تشكيلة منتقاة من أحدث الإطارات الطبية والشمسية'}
               </p>
             </div>
             <button
@@ -341,11 +357,11 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
         <div className="bg-white rounded-2xl border border-[#141413]/10 p-6 sm:p-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
           <div className="lg:col-span-6 space-y-4">
             <h2 className="text-2xl sm:text-3xl font-bold text-[#141413]">
-              موقع المحل وأرقام التواصل
+              {store.locationTitle || 'موقع المحل وأرقام التواصل'}
             </h2>
             <p className="text-sm text-[#4A4843] leading-relaxed">
-              نرحب بكم في فرعنا لفحص النظر وتجربة الإطارات على الطبيعة، أو اطلب عبر الموقع ليصلك
-              الطلب مع الدفع عند الاستلام.
+              {store.locationText ||
+                'نرحب بكم في فرعنا لفحص النظر وتجربة الإطارات على الطبيعة، أو اطلب عبر الموقع ليصلك الطلب مع الدفع عند الاستلام.'}
             </p>
 
             <div className="space-y-3 pt-2">

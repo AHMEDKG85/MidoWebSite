@@ -60,7 +60,9 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'storeName', 'tagline', 'aboutText', 'storyBeats', 'heroModelUrl',
           'address', 'mapLink', 'phones', 'whatsapp', 'workingHours',
-          'externalAdminUrl', 'updatedAt'
+          'externalAdminUrl', 'heroTitle', 'heroImageUrl', 'aboutTitle',
+          'featuredTitle', 'featuredSubtitle', 'locationTitle', 'locationText',
+          'homeDepartments', 'updatedAt'
         ])
         && isValidString(data.storeName, 2, 140)
         && isValidString(data.tagline, 2, 240)
@@ -75,6 +77,14 @@ service cloud.firestore {
         && (!('whatsapp' in data) || (data.whatsapp is string && data.whatsapp.size() <= 30))
         && isValidString(data.workingHours, 3, 200)
         && (!('externalAdminUrl' in data) || (data.externalAdminUrl is string && data.externalAdminUrl.size() <= 300))
+        && (!('heroTitle' in data) || (data.heroTitle is string && data.heroTitle.size() <= 180))
+        && (!('heroImageUrl' in data) || (data.heroImageUrl is string && data.heroImageUrl.size() <= 120000))
+        && (!('aboutTitle' in data) || (data.aboutTitle is string && data.aboutTitle.size() <= 140))
+        && (!('featuredTitle' in data) || (data.featuredTitle is string && data.featuredTitle.size() <= 140))
+        && (!('featuredSubtitle' in data) || (data.featuredSubtitle is string && data.featuredSubtitle.size() <= 300))
+        && (!('locationTitle' in data) || (data.locationTitle is string && data.locationTitle.size() <= 140))
+        && (!('locationText' in data) || (data.locationText is string && data.locationText.size() <= 1000))
+        && (!('homeDepartments' in data) || (data.homeDepartments is list && data.homeDepartments.size() <= 6))
         && data.updatedAt == request.time;
     }
 
