@@ -1,0 +1,6 @@
+{
+  "name": "MIDO OPTICS | ميدو للبصريات",
+  "description": "متجر ميدو للبصريات الإلكتروني للنظارات الطبية والشمسية والعدسات اللاصقة والإكسسوارات مع تجربة الكاميرا واختيار العدسات والدفع عند الاستلام.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

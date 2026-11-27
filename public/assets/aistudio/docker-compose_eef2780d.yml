@@ -1,0 +1,10 @@
+services:
+  mido-optics:
+    build: .
+    ports: ["4000:4000"]
+    env_file: .env
+    volumes: ["mido-data:/app/data", "mido-uploads:/app/uploads"]
+    restart: unless-stopped
+volumes:
+  mido-data:
+  mido-uploads:

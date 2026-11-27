@@ -1,0 +1,223 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isPrimaryAdmin() {
+      return isEmailVerified() && request.auth.token.email == 'a3972098@gmail.com';
+    }
+
+    function isAdmin() {
+      return isPrimaryAdmin() ||
+        (isEmailVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    // --- Validation Blueprints ---
+    function isValidStoreSettings(data) {
+      return data.keys().hasAll([
+          'storeName', 'tagline', 'aboutText', 'storyBeats',
+          'address', 'phones', 'workingHours', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'storeName', 'tagline', 'aboutText', 'storyBeats', 'heroModelUrl',
+          'address', 'mapLink', 'phones', 'whatsapp', 'workingHours',
+          'externalAdminUrl', 'updatedAt'
+        ])
+        && isValidString(data.storeName, 2, 140)
+        && isValidString(data.tagline, 2, 240)
+        && isValidString(data.aboutText, 5, 2000)
+        && data.storyBeats is list && data.storyBeats.size() >= 1 && data.storyBeats.size() <= 6
+        && data.storyBeats[0] is map
+        && (!('heroModelUrl' in data) || (data.heroModelUrl is string && data.heroModelUrl.size() <= 500))
+        && isValidString(data.address, 3, 300)
+        && (!('mapLink' in data) || (data.mapLink is string && data.mapLink.size() <= 400))
+        && data.phones is list && data.phones.size() >= 1 && data.phones.size() <= 6
+        && data.phones[0] is string
+        && (!('whatsapp' in data) || (data.whatsapp is string && data.whatsapp.size() <= 30))
+        && isValidString(data.workingHours, 3, 200)
+        && (!('externalAdminUrl' in data) || (data.externalAdminUrl is string && data.externalAdminUrl.size() <= 300))
+        && data.updatedAt == request.time;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll([
+          'slug', 'name', 'category', 'price', 'shortDesc', 'fullDesc',
+          'frameShape', 'published', 'allowPreorder', 'variants', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'slug', 'name', 'category', 'price', 'shortDesc', 'fullDesc',
+          'frameShape', 'material', 'dimensions', 'published', 'allowPreorder',
+          'preorderNote', 'variants', 'updatedAt'
+        ])
+        && isValidId(data.slug)
+        && isValidString(data.name, 2, 140)
+        && data.category in ['prescription', 'sunglasses', 'contact_lenses', 'accessories']
+        && data.price is number && data.price >= 0 && data.price <= 500000
+        && isValidString(data.shortDesc, 2, 320)
+        && isValidString(data.fullDesc, 2, 2000)
+        && isValidString(data.frameShape, 1, 60)
+        && (!('material' in data) || (data.material is string && data.material.size() <= 120))
+        && (!('dimensions' in data) || (data.dimensions is string && data.dimensions.size() <= 120))
+        && data.published is bool
+        && data.allowPreorder is bool
+        && (!('preorderNote' in data) || (data.preorderNote is string && data.preorderNote.size() <= 200))
+        && data.variants is list && data.variants.size() >= 1 && data.variants.size() <= 15
+        && data.variants[0] is map
+        && data.updatedAt == request.time;
+    }
+
+    function isValidLens(data) {
+      return data.keys().hasAll([
+          'name', 'subtitle', 'price', 'imageUrl', 'details',
+          'fullDescription', 'refractiveIndex', 'published', 'sortOrder', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'name', 'subtitle', 'price', 'imageUrl', 'details',
+          'fullDescription', 'refractiveIndex', 'published', 'sortOrder', 'updatedAt'
+        ])
+        && isValidString(data.name, 2, 140)
+        && isValidString(data.subtitle, 2, 240)
+        && data.price is number && data.price >= 0 && data.price <= 100000
+        && isValidString(data.imageUrl, 1, 500)
+        && data.details is list && data.details.size() >= 1 && data.details.size() <= 10
+        && data.details[0] is string
+        && isValidString(data.fullDescription, 2, 1500)
+        && isValidString(data.refractiveIndex, 1, 60)
+        && data.published is bool
+        && data.sortOrder is number && data.sortOrder >= 0 && data.sortOrder <= 1000
+        && data.updatedAt == request.time;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+          'orderCode', 'invoiceNumber', 'orderType', 'customerName',
+          'customerPhone', 'customerAddress', 'paymentMethod', 'items',
+          'frameSubtotal', 'lensSubtotal', 'total', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'orderCode', 'invoiceNumber', 'orderType', 'userId', 'customerName',
+          'customerPhone', 'customerAddress', 'paymentMethod', 'notes', 'items',
+          'prescription', 'frameSubtotal', 'lensSubtotal', 'total', 'status',
+          'externalSyncStatus', 'createdAt', 'updatedAt'
+        ])
+        && isValidString(data.orderCode, 4, 40)
+        && data.orderCode.matches('^[A-Z0-9\\-]+$')
+        && isValidString(data.invoiceNumber, 4, 40)
+        && data.orderType in ['standard', 'preorder']
+        && (!('userId' in data) || data.userId == null || (data.userId is string && data.userId.size() <= 128))
+        && isValidString(data.customerName, 2, 120)
+        && isValidString(data.customerPhone, 7, 30)
+        && isValidString(data.customerAddress, 4, 400)
+        && data.paymentMethod == 'cash_on_delivery'
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 600))
+        && data.items is list && data.items.size() >= 1 && data.items.size() <= 20
+        && data.items[0] is map
+        && (!('prescription' in data) || data.prescription == null || data.prescription is map)
+        && data.frameSubtotal is number && data.frameSubtotal >= 0 && data.frameSubtotal <= 5000000
+        && data.lensSubtotal is number && data.lensSubtotal >= 0 && data.lensSubtotal <= 5000000
+        && data.total is number && data.total >= 0 && data.total <= 10000000
+        && data.status in ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled']
+        && (!('externalSyncStatus' in data) || data.externalSyncStatus in ['pending', 'synced', 'failed', 'not_configured']);
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['email', 'role', 'createdAt'])
+        && data.keys().hasOnly(['email', 'role', 'createdAt'])
+        && isValidString(data.email, 3, 160)
+        && data.role == 'admin'
+        && data.createdAt == request.time;
+    }
+
+    // --- Collection Rules ---
+    match /test/connection {
+      allow get: if true;
+    }
+
+    match /store_settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if false;
+      allow create, update: if isAdmin() && isValidId(settingId) && isValidStoreSettings(incoming());
+      allow delete: if isAdmin() && isValidId(settingId);
+    }
+
+    match /products/{productId} {
+      allow get: if isValidId(productId) && (existing().published == true || isAdmin());
+      allow list: if resource.data.published == true || isAdmin();
+      allow create, update: if isAdmin() && isValidId(productId) && isValidProduct(incoming());
+      allow delete: if isAdmin() && isValidId(productId);
+    }
+
+    match /lenses/{lensId} {
+      allow get: if isValidId(lensId) && (existing().published == true || isAdmin());
+      allow list: if resource.data.published == true || isAdmin();
+      allow create, update: if isAdmin() && isValidId(lensId) && isValidLens(incoming());
+      allow delete: if isAdmin() && isValidId(lensId);
+    }
+
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && (
+        isAdmin() ||
+        (isSignedIn() && existing().userId == request.auth.uid)
+      );
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(orderId)
+        && isValidOrder(incoming())
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (!isSignedIn() && (!('userId' in incoming()) || incoming().userId == null)) ||
+          (isSignedIn() && incoming().userId == request.auth.uid)
+        );
+      allow update: if isAdmin()
+        && isValidId(orderId)
+        && isValidOrder(incoming())
+        && incoming().orderCode == existing().orderCode
+        && incoming().invoiceNumber == existing().invoiceNumber
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'externalSyncStatus', 'notes', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(orderId);
+    }
+
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isPrimaryAdmin());
+      allow list: if isPrimaryAdmin();
+      allow create: if isPrimaryAdmin() && isValidId(userId) && isValidAdminUser(incoming());
+      allow update, delete: if isPrimaryAdmin() && isValidId(userId);
+    }
+  }
+}
