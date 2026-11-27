@@ -28,32 +28,31 @@ import type {
 const DEFAULT_STORE: StoreSettings = {
   storeName: 'ميدو للبصريات | MIDO OPTICS',
   tagline: 'حرفية بصرية تجمع بين دقة القياس وأناقة الإطار',
-  aboutText:
-    'في ميدو للبصريات نؤمن بأن النظارة قطعة يومية تعبر عن ذوقك وتمنح عينيك راحة كاملة.',
+  aboutText: 'أضف نبذة المحل من لوحة التحكم لتظهر هنا.',
   storyBeats: [
     {
       title: 'لمحة عن ميدو للبصريات',
-      subtitle: 'خبرة تمتد لسنوات في العناية بالنظر',
-      body: 'بدأنا في قلب المهندسين برؤية واضحة: أن يحصل كل عميل على فحص بصري دقيق وإطار يليق بملامحه دون تعقيد، مع متابعة شخصية قبل الطلب وبعد الاستلام.',
+      subtitle: 'تعرف على المحل',
+      body: 'اكتب نبذة المحل وتفاصيله من لوحة التحكم.',
     },
     {
-      title: 'تجهيز عدسات بمعايير طبية دقيقة',
-      subtitle: 'معمل بصري مجهز بأحدث أجهزة القص والسنترة',
-      body: 'ننفذ مقاسات النظر الطبية بدقة متناهية شاملة مقاس القراءة ADD والمسافة بين الحدقتين IPD، مع خيارات العدسات المضغوطة وحماية الشاشات.',
+      title: 'خدمات المحل',
+      subtitle: 'أضف الخدمات التي تقدمها',
+      body: 'اكتب تفاصيل الخدمات والعدسات المتاحة من لوحة التحكم.',
     },
     {
-      title: 'معاينة فورية وحجز مسبق مرن',
-      subtitle: 'جرب الإطار بالكاميرا وادفع عند الاستلام',
-      body: 'سواء اخترت من التشكيلة الجاهزة أو عبر نظام الحجز المسبق للإصدارات الخاصة، يصلك طلبك مع فاتورة مفصلة والدفع نقداً عند الاستلام.',
+      title: 'التواصل والزيارة',
+      subtitle: 'كيف يصل إليك العميل؟',
+      body: 'أضف عنوان الفرع وأرقام التواصل وساعات العمل من لوحة التحكم.',
     },
   ],
   heroModelUrl: '',
-  address: 'القاهرة — المهندسين، 42 شارع جامعة الدول العربية',
-  mapLink: 'https://maps.google.com',
-  phones: ['01012345678', '01198765432'],
-  whatsapp: '201012345678',
-  workingHours: 'يومياً من 11:00 صباحاً حتى 11:00 مساءً',
-  externalAdminUrl: 'https://mido-optics-servies.vercel.app',
+  address: '',
+  mapLink: '',
+  phones: [],
+  whatsapp: '',
+  workingHours: '',
+  externalAdminUrl: '',
 };
 
 function resolveInitialRoute(): AppRoute {
@@ -104,6 +103,7 @@ export default function App() {
   const fetchCatalogData = useCallback(async () => {
     setLoading(true);
     let baseStore: StoreSettings | null = null;
+    let hasServerCatalog = false;
     try {
       const [storeRes, prodRes, lensRes] = await Promise.all([
         fetch('/api/store'),
@@ -123,11 +123,20 @@ export default function App() {
         prodParsed.ok && prodParsed.isJson && Array.isArray(prodParsed.data) ? prodParsed.data : [];
       const nextLenses: OpticalLens[] =
         lensParsed.ok && lensParsed.isJson && Array.isArray(lensParsed.data) ? lensParsed.data : [];
+      hasServerCatalog =
+        storeParsed.ok &&
+        storeParsed.isJson &&
+        prodParsed.ok &&
+        prodParsed.isJson &&
+        lensParsed.ok &&
+        lensParsed.isJson;
       baseStore = nextStore;
 
       if (nextStore) setStore(nextStore);
-      if (nextProducts.length > 0) setProducts(nextProducts);
-      if (nextLenses.length > 0) setLenses(nextLenses);
+      if (hasServerCatalog) {
+        setProducts(nextProducts);
+        setLenses(nextLenses);
+      }
     } finally {
       setLoading(false);
     }
@@ -143,7 +152,7 @@ export default function App() {
         fetchFirestorePublishedLenses(),
       ]);
 
-      if (cloudStore && cloudStore.storeName) {
+      if (!hasServerCatalog && cloudStore && cloudStore.storeName) {
         setStore({
           ...(baseStore || DEFAULT_STORE),
           ...cloudStore,
@@ -153,10 +162,10 @@ export default function App() {
               : baseStore?.storyBeats || DEFAULT_STORE.storyBeats,
         });
       }
-      if (cloudProducts && cloudProducts.length > 0) {
+      if (!hasServerCatalog && cloudProducts && cloudProducts.length > 0) {
         setProducts(cloudProducts);
       }
-      if (cloudLenses && cloudLenses.length > 0) {
+      if (!hasServerCatalog && cloudLenses && cloudLenses.length > 0) {
         setLenses(cloudLenses);
       }
     } catch {

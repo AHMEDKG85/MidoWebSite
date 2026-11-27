@@ -11,6 +11,7 @@ import {
   Timestamp,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import type {
   OpticalLens,
@@ -82,7 +83,7 @@ export async function fetchFirestoreStoreSettings(): Promise<StoreSettings | nul
       phones: Array.isArray(data.phones) ? data.phones.map(String) : [],
       whatsapp: String(data.whatsapp || ''),
       workingHours: String(data.workingHours || ''),
-      externalAdminUrl: String(data.externalAdminUrl || 'https://mido-optics-servies.vercel.app'),
+      externalAdminUrl: String(data.externalAdminUrl || ''),
     };
   } catch (err) {
     console.warn('[firestore] Unable to read store_settings/main:', err);
@@ -313,7 +314,8 @@ export async function saveFirestoreStoreSettings(settings: StoreSettings): Promi
               body: settings.aboutText.slice(0, 300),
             },
           ];
-    const phones = settings.phones.length > 0 ? settings.phones.slice(0, 6) : ['01012345678'];
+    const phones = settings.phones.map((phone) => phone.trim()).filter(Boolean).slice(0, 6);
+    if (phones.length === 0) throw new Error('أدخل رقم تواصل حقيقياً قبل حفظ بيانات المتجر.');
     await setDoc(doc(db, 'store_settings', 'main'), {
       storeName: settings.storeName.slice(0, 140),
       tagline: settings.tagline.slice(0, 240),
@@ -543,14 +545,57 @@ export async function deleteAllFirestoreOrders(): Promise<number> {
   const path = 'orders';
   try {
     const snap = await getDocs(collection(db, 'orders'));
-    let deleted = 0;
-    for (const d of snap.docs) {
-      await deleteDoc(doc(db, 'orders', d.id));
-      deleted += 1;
+    for (let start = 0; start < snap.docs.length; start += 400) {
+      const batch = writeBatch(db);
+      for (const orderDoc of snap.docs.slice(start, start + 400)) {
+        batch.delete(doc(db, 'orders', orderDoc.id));
+      }
+      await batch.commit();
     }
-    return deleted;
+    return snap.size;
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+export async function fetchFirestoreDeletedOrderCodes(): Promise<string[]> {
+  if (!db) return [];
+  await ensureFirestoreNetwork();
+  const path = 'deleted_order_codes';
+  try {
+    const snap = await getDocs(collection(db, path));
+    return snap.docs
+      .map((deletedDoc) => String(deletedDoc.data().orderCode || deletedDoc.id).toUpperCase())
+      .filter((code) => /^MDO-[A-Z0-9-]{4,36}$/.test(code));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, path);
+  }
+}
+
+export async function saveFirestoreDeletedOrderCodes(orderCodes: string[]): Promise<void> {
+  if (!db) throw new Error('Firebase غير مهيأ.');
+  const codes = Array.from(
+    new Set(
+      orderCodes
+        .map((code) => code.trim().toUpperCase())
+        .filter((code) => /^MDO-[A-Z0-9-]{4,36}$/.test(code)),
+    ),
+  );
+  if (codes.length === 0) return;
+  await ensureFirestoreNetwork();
+  try {
+    for (let start = 0; start < codes.length; start += 400) {
+      const batch = writeBatch(db);
+      for (const orderCode of codes.slice(start, start + 400)) {
+        batch.set(doc(db, 'deleted_order_codes', orderCode), {
+          orderCode,
+          deletedAt: serverTimestamp(),
+        });
+      }
+      await batch.commit();
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, 'deleted_order_codes');
   }
 }
 
@@ -560,6 +605,8 @@ export async function syncCatalogToFirestore(payload: {
   lenses: OpticalLens[];
   deletedOrderCodes?: string[];
 }): Promise<{ syncedProducts: number; syncedLenses: number; cleanedOrders: number }> {
+  const deletedOrderCodes = payload.deletedOrderCodes || [];
+  await saveFirestoreDeletedOrderCodes(deletedOrderCodes);
   await saveFirestoreStoreSettings(payload.store);
   for (const product of payload.products) {
     await saveFirestoreProduct(product);
@@ -568,8 +615,8 @@ export async function syncCatalogToFirestore(payload: {
     await saveFirestoreLens(lens);
   }
   let cleanedOrders = 0;
-  if (payload.deletedOrderCodes && payload.deletedOrderCodes.length > 0) {
-    for (const code of payload.deletedOrderCodes) {
+  if (deletedOrderCodes.length > 0) {
+    for (const code of deletedOrderCodes) {
       await deleteFirestoreOrder(code);
       cleanedOrders += 1;
     }

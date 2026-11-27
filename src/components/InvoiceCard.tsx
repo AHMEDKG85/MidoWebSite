@@ -18,8 +18,8 @@ export function InvoiceCard({
   const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
   const lines = buildInvoiceLines(order);
   const storeName = store?.storeName || 'ميدو للبصريات | MIDO OPTICS';
-  const storeAddress = store?.address || 'القاهرة — المهندسين، 42 شارع جامعة الدول العربية';
-  const storePhones = store?.phones?.length ? store.phones.join(' / ') : '01012345678';
+  const storeAddress = store?.address || '';
+  const storePhones = store?.phones?.length ? store.phones.join(' / ') : '';
   const rx = order.prescription;
   const hasManualRx = Boolean(
     rx &&
@@ -43,10 +43,12 @@ export function InvoiceCard({
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#141413]/12 pb-5">
         <div className="space-y-1">
           <div className="text-lg font-bold text-[#141413]">{storeName}</div>
-          <div className="text-xs text-[#4A4843]">{storeAddress}</div>
-          <div className="text-xs font-mono tabular-nums text-[#6E6B64]" dir="ltr">
-            {storePhones}
-          </div>
+          {storeAddress && <div className="text-xs text-[#4A4843]">{storeAddress}</div>}
+          {storePhones && (
+            <div className="text-xs font-mono tabular-nums text-[#6E6B64]" dir="ltr">
+              {storePhones}
+            </div>
+          )}
         </div>
 
         <div className="text-left space-y-1">

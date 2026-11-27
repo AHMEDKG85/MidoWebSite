@@ -15,18 +15,18 @@ interface HomePageProps {
 const FALLBACK_STORY_BEATS: StoryBeat[] = [
   {
     title: 'لمحة عن ميدو للبصريات',
-    subtitle: 'خبرة تمتد لسنوات في العناية بالنظر',
-    body: 'بدأنا برؤية واضحة: أن يحصل كل عميل على فحص بصري دقيق وإطار يليق بملامحه دون تعقيد، مع متابعة شخصية قبل الطلب وبعد الاستلام.',
+    subtitle: 'تعرف على المحل',
+    body: 'أضف نبذة المحل وتفاصيله من لوحة التحكم.',
   },
   {
-    title: 'تجهيز عدسات بمعايير طبية دقيقة',
-    subtitle: 'معمل بصري مجهز بأحدث أجهزة القص والسنترة',
-    body: 'ننفذ مقاسات النظر الطبية بدقة متناهية شاملة مقاس القراءة ADD والمسافة بين الحدقتين IPD، مع خيارات العدسات المضغوطة وحماية الشاشات.',
+    title: 'خدمات المحل',
+    subtitle: 'أضف الخدمات التي تقدمها',
+    body: 'اكتب تفاصيل الخدمات والعدسات المتاحة من لوحة التحكم.',
   },
   {
-    title: 'معاينة فورية وحجز مسبق مرن',
-    subtitle: 'جرب الإطار بالكاميرا وادفع عند الاستلام',
-    body: 'سواء اخترت من التشكيلة الجاهزة أو عبر نظام الحجز المسبق للإصدارات الخاصة، يصلك طلبك مع فاتورة مفصلة والدفع نقداً عند الاستلام.',
+    title: 'التواصل والزيارة',
+    subtitle: 'كيف يصل إليك العميل؟',
+    body: 'أضف عنوان الفرع وأرقام التواصل وساعات العمل من لوحة التحكم.',
   },
 ];
 
@@ -123,23 +123,23 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
   };
 
   return (
-    <div className="space-y-20">
+    <div className="mido-home space-y-24 sm:space-y-28">
       {/* Section 1: Apple-Style Scroll-Driven 3D Eyewear + Editable Store Story Beats */}
       <section
         ref={scrollyRef}
-        className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-10 lg:min-h-[235vh]"
+        className="mido-hero max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-10 lg:min-h-[235vh]"
       >
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-start lg:sticky lg:top-20">
+        <div className="mido-hero-grid grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-start lg:sticky lg:top-20">
           {/* Store Intro + Dynamic Story Beat Column */}
           <div className="lg:col-span-5 space-y-6 lg:pt-4">
             <div className="space-y-3">
-              <p className="text-xs font-medium text-[#9A7B4F]">
-                {store.storeName} · لمحة عن المحل
+              <p className="mido-eyebrow text-xs font-bold text-[#84603A]">
+                {store.storeName} <span aria-hidden="true">·</span> بصريات بتفاصيل أدق
               </p>
-              <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-[#141413] leading-[1.2] text-balance">
+              <h1 className="mido-hero-title text-4xl sm:text-5xl lg:text-7xl font-bold text-[#18251F] leading-[1.1] text-balance">
                 رؤية واضحة بتصميم يليق بملامحك
               </h1>
-              <p className="text-sm sm:text-base text-[#4A4843] leading-relaxed">
+              <p className="max-w-xl text-base sm:text-lg text-[#4A4843] leading-relaxed">
                 {store.tagline}
               </p>
             </div>
@@ -147,7 +147,7 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
             {/* Active Story Beat Card (Driven by Scroll or Clickable Step) */}
             <div
               data-testid="active-story-beat"
-              className="bg-white rounded-2xl border border-[#141413]/12 p-5 sm:p-6 space-y-3 transition-all duration-300"
+              className="mido-story-card bg-white/85 rounded-2xl border border-[#B7A27E]/35 p-5 sm:p-6 space-y-3 transition-all duration-300"
             >
               <div className="flex items-center justify-between gap-3">
                 <span className="text-[11px] font-mono tabular-nums text-[#9A7B4F] font-bold">
@@ -172,9 +172,9 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
                 </div>
               </div>
 
-              <div className="space-y-1.5">
-                <div className="text-xs font-medium text-[#9A7B4F]">{activeBeat.subtitle}</div>
-                <h2 className="text-lg sm:text-xl font-bold text-[#141413]">
+              <div key={activeBeatIdx} className="mido-story-enter space-y-1.5">
+                <div className="text-xs font-bold text-[#84603A]">{activeBeat.subtitle}</div>
+                <h2 className="text-lg sm:text-xl font-bold text-[#18251F]">
                   {activeBeat.title}
                 </h2>
                 <p className="text-sm text-[#4A4843] leading-relaxed">{activeBeat.body}</p>
@@ -185,7 +185,7 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
               <button
                 type="button"
                 onClick={() => onNavigate({ page: 'optical' })}
-                className="px-6 py-3 rounded-xl bg-[#141413] text-white text-sm font-medium hover:bg-[#2B2B29] transition-colors inline-flex items-center gap-2 whitespace-nowrap"
+                className="mido-primary-button px-6 py-3 rounded-xl bg-[#18251F] text-white text-sm font-bold hover:bg-[#26382F] transition-colors inline-flex items-center gap-2 whitespace-nowrap"
               >
                 <span>تصفح النظارات الطبية</span>
                 <ArrowLeft className="w-4 h-4" />
@@ -193,7 +193,7 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
               <button
                 type="button"
                 onClick={() => onNavigate({ page: 'sunglasses' })}
-                className="px-5 py-3 rounded-xl bg-white border border-[#141413]/15 text-[#141413] text-sm font-medium hover:bg-[#EFECE5] transition-colors whitespace-nowrap"
+                className="px-5 py-3 rounded-xl bg-white/80 border border-[#18251F]/15 text-[#18251F] text-sm font-bold hover:bg-white transition-colors whitespace-nowrap"
               >
                 النظارات الشمسية
               </button>
@@ -201,7 +201,7 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
           </div>
 
           {/* Sticky 3D Stage */}
-          <div className="lg:col-span-7">
+          <div className="mido-stage-wrap lg:col-span-7">
             <GlassesHero3D
               scrollProgress={effectiveProgress}
               heroModelUrl={store.heroModelUrl}
@@ -224,7 +224,7 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
               {storyBeats.map((beat, idx) => (
                 <div
                   key={idx}
-                  className="bg-white rounded-xl border border-[#141413]/10 p-4 space-y-1.5"
+                  className="mido-beat-card bg-white rounded-xl border border-[#141413]/10 p-4 space-y-1.5"
                 >
                   <div className="text-[11px] font-mono tabular-nums text-[#9A7B4F]">
                     0{idx + 1}
@@ -243,7 +243,7 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
               key={dept.page}
               type="button"
               onClick={() => onNavigate({ page: dept.page } as AppRoute)}
-              className="group text-right bg-white rounded-2xl border border-[#141413]/10 overflow-hidden transition-transform duration-200 hover:-translate-y-1 flex flex-col"
+              className="home-category-card group text-right bg-white rounded-2xl border border-[#141413]/10 overflow-hidden transition-transform duration-200 hover:-translate-y-1 flex flex-col"
             >
               <div className="aspect-[4/3] w-full overflow-hidden bg-[#ECEAE3]">
                 <SmartImage
@@ -295,7 +295,7 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
                   key={product.id}
                   type="button"
                   onClick={() => onNavigate({ page: 'product', slug: product.slug })}
-                  className="group text-right bg-white rounded-2xl border border-[#141413]/10 overflow-hidden transition-transform duration-200 hover:-translate-y-0.5 flex flex-col"
+                  className="home-product-card group text-right bg-white rounded-2xl border border-[#141413]/10 overflow-hidden transition-transform duration-200 hover:-translate-y-1 flex flex-col"
                 >
                   <div className="aspect-[4/3] w-full bg-[#ECEAE3] overflow-hidden">
                     <SmartImage
@@ -349,15 +349,15 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
             </p>
 
             <div className="space-y-3 pt-2">
-              <div className="flex items-start gap-3 text-sm text-[#141413]">
+              {store.address && <div className="flex items-start gap-3 text-sm text-[#141413]">
                 <MapPin className="w-5 h-5 text-[#9A7B4F] shrink-0 mt-0.5" />
                 <div>
                   <div className="font-bold">العنوان</div>
                   <div className="text-[#4A4843]">{store.address}</div>
                 </div>
-              </div>
+              </div>}
 
-              <div className="flex items-start gap-3 text-sm text-[#141413]">
+              {store.phones.length > 0 && <div className="flex items-start gap-3 text-sm text-[#141413]">
                 <Phone className="w-5 h-5 text-[#9A7B4F] shrink-0 mt-0.5" />
                 <div>
                   <div className="font-bold">أرقام الهاتف</div>
@@ -374,15 +374,18 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
                     ))}
                   </div>
                 </div>
-              </div>
+              </div>}
 
-              <div className="flex items-start gap-3 text-sm text-[#141413]">
+              {store.workingHours && <div className="flex items-start gap-3 text-sm text-[#141413]">
                 <Clock className="w-5 h-5 text-[#9A7B4F] shrink-0 mt-0.5" />
                 <div>
                   <div className="font-bold">ساعات العمل</div>
                   <div className="text-[#4A4843]">{store.workingHours}</div>
                 </div>
-              </div>
+              </div>}
+              {!store.address && store.phones.length === 0 && !store.workingHours && (
+                <p className="text-sm text-[#6E6B64]">أكمل بيانات الفرع من لوحة التحكم لتظهر هنا.</p>
+              )}
             </div>
           </div>
 
@@ -415,6 +418,9 @@ export function HomePage({ store, featuredProducts, onNavigate }: HomePageProps)
                   <MessageCircle className="w-4 h-4 text-[#256D4A]" />
                   <span>تواصل عبر واتساب</span>
                 </a>
+              )}
+              {!store.mapLink && !store.whatsapp && (
+                <p className="text-xs text-[#6E6B64]">أضف رابط الخريطة وواتساب من لوحة التحكم.</p>
               )}
             </div>
           </div>

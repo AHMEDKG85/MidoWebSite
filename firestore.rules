@@ -204,8 +204,10 @@ service cloud.firestore {
         (isSignedIn() && existing().userId == request.auth.uid)
       );
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow create: if isValidId(orderId)
+      allow create: if isAdmin()
+        && isValidId(orderId)
         && isValidOrder(incoming())
+        && !exists(/databases/$(database)/documents/deleted_order_codes/$(incoming().orderCode))
         && incoming().status == 'pending'
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
@@ -222,6 +224,16 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'externalSyncStatus', 'notes', 'updatedAt']);
       allow delete: if isAdmin() && isValidId(orderId);
+    }
+
+    match /deleted_order_codes/{orderCode} {
+      allow get, list: if isAdmin() && isValidId(orderCode);
+      allow create, update: if isAdmin()
+        && isValidId(orderCode)
+        && incoming().keys().hasOnly(['orderCode', 'deletedAt'])
+        && incoming().orderCode == orderCode
+        && incoming().deletedAt == request.time;
+      allow delete: if false;
     }
 
     match /admins/{userId} {

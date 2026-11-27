@@ -40,11 +40,11 @@ const ENDPOINTS: EndpointSpec[] = [
   "tagline": "حرفية بصرية تجمع بين دقة القياس وأناقة الإطار",
   "aboutText": "نص لمحة عن المحل...",
   "address": "القاهرة — المهندسين",
-  "mapLink": "https://maps.google.com",
-  "phones": ["01012345678", "01198765432"],
-  "whatsapp": "201012345678",
+  "mapLink": "",
+  "phones": ["اكتب رقم الهاتف الحقيقي"],
+  "whatsapp": "اكتب رقم واتساب الحقيقي",
   "workingHours": "يومياً من 11 صباحاً حتى 11 مساءً",
-  "externalAdminUrl": "https://mido-optics-servies.vercel.app"
+  "externalAdminUrl": ""
 }`,
   },
   {
@@ -170,7 +170,7 @@ export function ApiDocsPage({ store, onNavigate }: ApiDocsPageProps) {
         setHealthResult(`HTTP ${res.status} — ${JSON.stringify(parsed.data)}`);
       } else {
         setHealthResult(
-          `HTTP ${res.status} — لا يوجد خادم Express على هذا النطاق الثابت؛ الموقع يعمل بالمزامنة السحابية مع Firebase.`,
+          `HTTP ${res.status} — خادم الطلبات غير متاح على هذا النطاق. شغّل خادم MidoWebSite قبل استقبال الطلبات.`,
         );
       }
     } catch {

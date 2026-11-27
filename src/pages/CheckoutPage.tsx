@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import {
   Camera,
   CheckCircle2,
@@ -11,9 +11,13 @@ import {
 } from 'lucide-react';
 import { InvoiceCard } from '../components/InvoiceCard';
 import { SmartImage } from '../components/SmartImage';
-import { createFirestoreOrder, resolveOrderImageUrl } from '../lib/firestoreStore';
+import { resolveOrderImageUrl } from '../lib/firestoreStore';
 import { compressImageFileToDataUrl } from '../lib/imageUtils';
-import { generateClientOrderIdentifiers, readJsonSafe } from '../lib/safeFetch';
+import {
+  createPayloadFingerprint,
+  generateClientOrderIdentifiers,
+  readJsonSafe,
+} from '../lib/safeFetch';
 import {
   calculateCartTotals,
   calculateItemUnitTotal,
@@ -66,6 +70,12 @@ export function CheckoutPage({
   const [uploadingRx, setUploadingRx] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
+  const submitLockRef = useRef(false);
+  const orderIdentifiersRef = useRef<{
+    fingerprint: string;
+    orderCode: string;
+    invoiceNumber: string;
+  } | null>(null);
   const [error, setError] = useState('');
   const [confirmedOrder, setConfirmedOrder] = useState<OrderRecord | null>(null);
 
@@ -75,33 +85,15 @@ export function CheckoutPage({
     setError('');
     setUploadingRx(true);
     try {
-      // Compress into a portable self-contained JPEG data URL so prescription photos display directly
-      // inside invoices and external dashboards without cross-domain redirects or missing /uploads files.
-      try {
-        const compressedUrl = await compressImageFileToDataUrl(file, 960, 0.72);
-        if (compressedUrl && compressedUrl.length <= 420000) {
-          setRxImageUrl(compressedUrl);
-          return;
-        }
-      } catch {
-        // Fallback to server multipart upload if client-side image compression is unavailable
+      // Keep prescription images portable without placing them on a public uploads path.
+      let compressedUrl = await compressImageFileToDataUrl(file, 960, 0.64);
+      if (compressedUrl.length > 360000) {
+        compressedUrl = await compressImageFileToDataUrl(file, 720, 0.48);
       }
-      const form = new FormData();
-      form.append('image', file);
-      const res = await fetch('/api/upload-prescription', {
-        method: 'POST',
-        body: form,
-      });
-      const parsed = await readJsonSafe<{ url?: string; error?: string }>(res);
-      if (parsed.isJson) {
-        if (!parsed.ok || !parsed.data?.url) {
-          throw new Error(parsed.data?.error || 'فشل رفع صورة كشف النظر');
-        }
-        setRxImageUrl(resolveOrderImageUrl(parsed.data.url));
-      } else {
-        const compressedFallback = await compressImageFileToDataUrl(file, 720, 0.6);
-        setRxImageUrl(compressedFallback);
+      if (compressedUrl.length > 440000) {
+        throw new Error('الصورة كبيرة جداً بعد الضغط. اختر صورة أوضح بحجم أصغر.');
       }
+      setRxImageUrl(compressedUrl);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر رفع الصورة');
     } finally {
@@ -111,6 +103,7 @@ export function CheckoutPage({
 
   const handleSubmitOrder = async (e: FormEvent) => {
     e.preventDefault();
+    if (submitLockRef.current) return;
     setError('');
 
     if (cart.length === 0) {
@@ -158,8 +151,6 @@ export function CheckoutPage({
           },
           ipd: ipd.trim(),
           imageUrl: normalizedRxImg,
-          absoluteImageUrl: normalizedRxImg,
-          photoUrl: normalizedRxImg,
         }
       : null;
 
@@ -172,101 +163,84 @@ export function CheckoutPage({
       return;
     }
 
+    submitLockRef.current = true;
     setSubmitting(true);
     try {
+      const orderPayload = {
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
+        customerAddress: customerAddress.trim(),
+        notes: notes.trim(),
+        orderType: totals.hasPreorderItem ? 'preorder' : 'standard',
+        items: cart.map((item) => {
+          return {
+            productId: item.productId,
+            productSlug: item.productSlug,
+            variantId: item.variantId,
+            colorName: item.colorName,
+            lensName: item.lensName,
+            lensId: item.lensId,
+            quantity: item.quantity,
+          };
+        }),
+        prescription: prescriptionPayload,
+      };
+      const fingerprint = await createPayloadFingerprint(JSON.stringify(orderPayload));
+      let orderIdentifiers = orderIdentifiersRef.current;
+      if (!orderIdentifiers || orderIdentifiers.fingerprint !== fingerprint) {
+        try {
+          const stored = JSON.parse(
+            sessionStorage.getItem('mido_checkout_order_attempt_v1') || 'null',
+          ) as typeof orderIdentifiers;
+          orderIdentifiers = stored?.fingerprint === fingerprint ? stored : null;
+        } catch {
+          orderIdentifiers = null;
+        }
+        if (!orderIdentifiers) {
+          orderIdentifiers = { fingerprint, ...generateClientOrderIdentifiers() };
+        }
+        orderIdentifiersRef.current = orderIdentifiers;
+        try {
+          sessionStorage.setItem(
+            'mido_checkout_order_attempt_v1',
+            JSON.stringify(orderIdentifiers),
+          );
+        } catch {
+          // The in-memory lock still prevents duplicates during this page session.
+        }
+      }
+
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customerName: customerName.trim(),
-          customerPhone: customerPhone.trim(),
-          customerAddress: customerAddress.trim(),
-          notes: notes.trim(),
-          orderType: totals.hasPreorderItem ? 'preorder' : 'standard',
-          items: cart.map((item) => {
-            const resolvedImg = resolveOrderImageUrl(item.imageUrl || item.frameImageUrl);
-            return {
-              productId: item.productId,
-              productSlug: item.productSlug,
-              productName: item.productName,
-              category: item.category,
-              colorName: item.colorName,
-              colorHex: item.colorHex,
-              frameShape: item.frameShape,
-              imageUrl: item.imageUrl || resolvedImg,
-              frameImageUrl: resolvedImg,
-              absoluteImageUrl: resolvedImg,
-              framePrice: item.framePrice,
-              lensName: item.lensName,
-              lensPrice: item.lensPrice,
-              variantId: item.variantId,
-              lensId: item.lensId,
-              quantity: item.quantity,
-              orderType: item.orderType || 'standard',
-            };
-          }),
-          prescription: prescriptionPayload,
-        }),
+        body: JSON.stringify({ ...orderIdentifiers, ...orderPayload }),
       });
-      const parsed = await readJsonSafe<OrderRecord & { error?: string; code?: string }>(res);
+      const parsed = await readJsonSafe<
+        OrderRecord & { error?: string; code?: string; idempotent?: boolean }
+      >(res);
       let finalOrder: OrderRecord;
 
-      const useCloudFallback =
-        !parsed.isJson || parsed.data?.code === 'CLOUD_CATALOG_FALLBACK';
-
-      if (!useCloudFallback) {
-        if (!parsed.ok || !parsed.data) {
-          throw new Error(parsed.data?.error || 'حدث خطأ أثناء تسجيل الطلب.');
-        }
-        finalOrder = parsed.data;
-        // Backup to Cloud Firestore in background so slow/offline Firestore never blocks Express invoice confirmation
-        void createFirestoreOrder(finalOrder);
-      } else {
-        // Static hosting or cloud-added product fallback: submit directly to Cloud Firestore
-        const { orderCode, invoiceNumber } = generateClientOrderIdentifiers();
-        const itemsWithImages = cart.map((item) => {
-          const resolvedImg = resolveOrderImageUrl(item.imageUrl || item.frameImageUrl);
-          return {
-            ...item,
-            imageUrl: item.imageUrl || resolvedImg,
-            frameImageUrl: resolvedImg,
-            absoluteImageUrl: resolvedImg,
-          };
-        });
-        finalOrder = {
-          id: Date.now(),
-          orderCode,
-          invoiceNumber,
-          orderType: totals.hasPreorderItem ? 'preorder' : 'standard',
-          customerName: customerName.trim(),
-          customerPhone: customerPhone.trim(),
-          customerAddress: customerAddress.trim(),
-          paymentMethod: 'cash_on_delivery',
-          notes: notes.trim(),
-          items: itemsWithImages,
-          prescription: prescriptionPayload,
-          frameImageUrl:
-            itemsWithImages[0]?.frameImageUrl || itemsWithImages[0]?.imageUrl || '',
-          selectedFrameName: itemsWithImages[0]?.productName || '',
-          selectedFrameColor: itemsWithImages[0]?.colorName || '',
-          prescriptionImageUrl: normalizedRxImg,
-          frameSubtotal: totals.frameSubtotal,
-          lensSubtotal: totals.lensSubtotal,
-          subtotal: totals.total,
-          total: totals.total,
-          status: 'pending',
-          externalSyncStatus: 'not_configured',
-          createdAt: new Date().toISOString(),
-        };
-        await createFirestoreOrder(finalOrder, { throwOnError: true });
+      if (!parsed.isJson) {
+        throw new Error('خدمة الطلبات غير متاحة على الاستضافة الحالية. شغّل خادم MidoWebSite ثم أعد المحاولة؛ لم يتم حفظ الطلب.');
       }
+      if (!parsed.ok || !parsed.data) {
+        throw new Error(parsed.data?.error || 'حدث خطأ أثناء تسجيل الطلب.');
+      }
+      finalOrder = parsed.data;
 
+      try {
+        sessionStorage.removeItem('mido_checkout_order_attempt_v1');
+      } catch {
+        // Ignore unavailable session storage after the order is confirmed.
+      }
+      orderIdentifiersRef.current = null;
       setConfirmedOrder(finalOrder);
       onClearCart();
       window.scrollTo({ top: 0, behavior: 'instant' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر إرسال الطلب، حاول مرة أخرى.');
     } finally {
+      submitLockRef.current = false;
       setSubmitting(false);
     }
   };
@@ -729,7 +703,7 @@ export function CheckoutPage({
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || uploadingRx}
             className="w-full py-3.5 px-5 rounded-xl bg-[#141413] text-white text-sm font-bold hover:bg-[#2B2B29] transition-colors disabled:opacity-60"
           >
             {submitting
