@@ -12,6 +12,7 @@ import {
 import { InvoiceCard } from '../components/InvoiceCard';
 import { SmartImage } from '../components/SmartImage';
 import { createFirestoreOrder } from '../lib/firestoreStore';
+import { generateClientOrderIdentifiers, readJsonSafe } from '../lib/safeFetch';
 import {
   calculateCartTotals,
   calculateItemUnitTotal,
@@ -33,6 +34,31 @@ interface CheckoutPageProps {
   onRemoveItem: (itemId: string) => void;
   onClearCart: () => void;
   onNavigate: (route: AppRoute) => void;
+}
+
+async function compressImageFileToDataUrl(file: File): Promise<string> {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('تعذر قراءة الصورة'));
+      el.src = objectUrl;
+    });
+    const maxDim = 960;
+    const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+    const width = Math.max(1, Math.round(img.width * scale));
+    const height = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('تعذر معالجة الصورة');
+    ctx.drawImage(img, 0, 0, width, height);
+    return canvas.toDataURL('image/jpeg', 0.72);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 export function CheckoutPage({
@@ -79,11 +105,17 @@ export function CheckoutPage({
         method: 'POST',
         body: form,
       });
-      const data = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !data.url) {
-        throw new Error(data.error || 'فشل رفع صورة كشف النظر');
+      const parsed = await readJsonSafe<{ url?: string; error?: string }>(res);
+      if (parsed.isJson) {
+        if (!parsed.ok || !parsed.data?.url) {
+          throw new Error(parsed.data?.error || 'فشل رفع صورة كشف النظر');
+        }
+        setRxImageUrl(parsed.data.url);
+      } else {
+        // Static hosting fallback (e.g., Vercel frontend): compress image for direct Firestore storage
+        const compressedUrl = await compressImageFileToDataUrl(file);
+        setRxImageUrl(compressedUrl);
       }
-      setRxImageUrl(data.url);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر رفع الصورة');
     } finally {
@@ -172,15 +204,43 @@ export function CheckoutPage({
           prescription: prescriptionPayload,
         }),
       });
-      const data = (await res.json()) as OrderRecord & { error?: string };
-      if (!res.ok) {
-        throw new Error(data.error || 'حدث خطأ أثناء تسجيل الطلب.');
+      const parsed = await readJsonSafe<OrderRecord & { error?: string }>(res);
+      let finalOrder: OrderRecord;
+
+      if (parsed.isJson) {
+        if (!parsed.ok || !parsed.data) {
+          throw new Error(parsed.data?.error || 'حدث خطأ أثناء تسجيل الطلب.');
+        }
+        finalOrder = parsed.data;
+        // Backup to Cloud Firestore so admin sees orders across devices
+        await createFirestoreOrder(finalOrder);
+      } else {
+        // Static hosting fallback (e.g., Vercel frontend without Express API): submit directly to Cloud Firestore
+        const { orderCode, invoiceNumber } = generateClientOrderIdentifiers();
+        finalOrder = {
+          id: Date.now(),
+          orderCode,
+          invoiceNumber,
+          orderType: totals.hasPreorderItem ? 'preorder' : 'standard',
+          customerName: customerName.trim(),
+          customerPhone: customerPhone.trim(),
+          customerAddress: customerAddress.trim(),
+          paymentMethod: 'cash_on_delivery',
+          notes: notes.trim(),
+          items: cart,
+          prescription: prescriptionPayload,
+          frameSubtotal: totals.frameSubtotal,
+          lensSubtotal: totals.lensSubtotal,
+          subtotal: totals.total,
+          total: totals.total,
+          status: 'pending',
+          externalSyncStatus: 'not_configured',
+          createdAt: new Date().toISOString(),
+        };
+        await createFirestoreOrder(finalOrder, { throwOnError: true });
       }
 
-      // Backup to Cloud Firestore so admin sees orders across devices
-      await createFirestoreOrder(data);
-
-      setConfirmedOrder(data);
+      setConfirmedOrder(finalOrder);
       onClearCart();
       window.scrollTo({ top: 0, behavior: 'instant' });
     } catch (err) {

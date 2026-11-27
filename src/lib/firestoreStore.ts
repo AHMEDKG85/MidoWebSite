@@ -161,23 +161,32 @@ function mapFirestoreLens(docId: string, data: Record<string, unknown>): Optical
   };
 }
 
-export async function createFirestoreOrder(order: OrderRecord): Promise<void> {
-  if (!db) return;
+export async function createFirestoreOrder(
+  order: OrderRecord,
+  options?: { throwOnError?: boolean },
+): Promise<void> {
+  if (!db) {
+    if (options?.throwOnError) {
+      throw new Error('خدمة الطلبات غير متاحة حالياً. تأكد من الاتصال بالإنترنت.');
+    }
+    return;
+  }
   await ensureFirestoreNetwork();
-  const orderId = `ord-${safeSlugId(order.orderCode, 'ord')}`;
+  const safeOrderCode = order.orderCode.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 40) || 'MDO-ORDER';
+  const orderId = `ord-${safeSlugId(safeOrderCode, 'ord')}`;
   const path = `orders/${orderId}`;
   try {
     const payload = {
-      orderCode: order.orderCode,
-      invoiceNumber: order.invoiceNumber,
-      orderType: order.orderType,
+      orderCode: safeOrderCode,
+      invoiceNumber: (order.invoiceNumber || `INV-${safeOrderCode}`).slice(0, 40),
+      orderType: order.orderType === 'preorder' ? ('preorder' as const) : ('standard' as const),
       userId: auth?.currentUser?.uid ?? null,
-      customerName: order.customerName,
-      customerPhone: order.customerPhone,
-      customerAddress: order.customerAddress,
+      customerName: order.customerName.trim().slice(0, 120),
+      customerPhone: order.customerPhone.trim().slice(0, 30),
+      customerAddress: order.customerAddress.trim().slice(0, 400),
       paymentMethod: 'cash_on_delivery' as const,
-      notes: order.notes || '',
-      items: order.items.map((item) => ({
+      notes: (order.notes || '').trim().slice(0, 600),
+      items: order.items.slice(0, 20).map((item) => ({
         id: item.id,
         productId: item.productId,
         productSlug: item.productSlug,
@@ -203,8 +212,27 @@ export async function createFirestoreOrder(order: OrderRecord): Promise<void> {
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
-    await setDoc(doc(db, 'orders', orderId), payload);
+    const writePromise = setDoc(doc(db, 'orders', orderId), payload);
+    if (options?.throwOnError) {
+      await Promise.race([
+        writePromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('انتهت مهلة الاتصال بقاعدة البيانات. تحقق من الإنترنت وحاول مرة أخرى.')),
+            12000,
+          ),
+        ),
+      ]);
+    } else {
+      await writePromise;
+    }
   } catch (err) {
+    if (options?.throwOnError) {
+      if (err instanceof Error && err.message.includes('انتهت مهلة الاتصال')) {
+        throw err;
+      }
+      handleFirestoreError(err, OperationType.CREATE, path);
+    }
     console.warn('[firestore] Cloud order backup skipped:', err);
   }
 }

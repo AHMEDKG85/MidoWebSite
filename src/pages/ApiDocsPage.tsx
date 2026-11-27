@@ -10,6 +10,7 @@ import {
   Webhook,
 } from 'lucide-react';
 import type { AppRoute } from '../components/Navbar';
+import { readJsonSafe } from '../lib/safeFetch';
 import type { StoreSettings } from '../types';
 
 interface ApiDocsPageProps {
@@ -153,8 +154,14 @@ export function ApiDocsPage({ store, onNavigate }: ApiDocsPageProps) {
     setHealthLoading(true);
     try {
       const res = await fetch('/api/health');
-      const data = await res.json();
-      setHealthResult(`HTTP ${res.status} — ${JSON.stringify(data)}`);
+      const parsed = await readJsonSafe<Record<string, unknown>>(res);
+      if (parsed.isJson && parsed.data) {
+        setHealthResult(`HTTP ${res.status} — ${JSON.stringify(parsed.data)}`);
+      } else {
+        setHealthResult(
+          `HTTP ${res.status} — لا يوجد خادم Express على هذا النطاق الثابت؛ الموقع يعمل بالمزامنة السحابية مع Firebase.`,
+        );
+      }
     } catch {
       setHealthResult('تعذر الاتصال بنقطة /api/health');
     } finally {

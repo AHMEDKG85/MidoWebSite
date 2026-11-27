@@ -7,6 +7,7 @@ import {
   fetchFirestorePublishedProducts,
   fetchFirestoreStoreSettings,
 } from './lib/firestoreStore';
+import { readJsonSafe } from './lib/safeFetch';
 import { calculateCartTotals, isPreorderAvailable } from './lib/storeLogic';
 import { AdminPage } from './pages/AdminPage';
 import { ApiDocsPage } from './pages/ApiDocsPage';
@@ -110,14 +111,23 @@ export default function App() {
         fetch('/api/lenses'),
       ]);
 
-      const nextStore: StoreSettings | null = storeRes.ok ? await storeRes.json() : null;
-      const nextProducts: Product[] = prodRes.ok ? await prodRes.json() : [];
-      const nextLenses: OpticalLens[] = lensRes.ok ? await lensRes.json() : [];
+      const [storeParsed, prodParsed, lensParsed] = await Promise.all([
+        readJsonSafe<StoreSettings>(storeRes),
+        readJsonSafe<Product[]>(prodRes),
+        readJsonSafe<OpticalLens[]>(lensRes),
+      ]);
+
+      const nextStore: StoreSettings | null =
+        storeParsed.ok && storeParsed.isJson ? storeParsed.data : null;
+      const nextProducts: Product[] =
+        prodParsed.ok && prodParsed.isJson && Array.isArray(prodParsed.data) ? prodParsed.data : [];
+      const nextLenses: OpticalLens[] =
+        lensParsed.ok && lensParsed.isJson && Array.isArray(lensParsed.data) ? lensParsed.data : [];
       baseStore = nextStore;
 
       if (nextStore) setStore(nextStore);
-      setProducts(nextProducts);
-      setLenses(nextLenses);
+      if (nextProducts.length > 0) setProducts(nextProducts);
+      if (nextLenses.length > 0) setLenses(nextLenses);
     } finally {
       setLoading(false);
     }

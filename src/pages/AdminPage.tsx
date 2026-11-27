@@ -30,6 +30,7 @@ import {
   syncCatalogToFirestore,
   updateFirestoreOrderStatus,
 } from '../lib/firestoreStore';
+import { readJsonSafe } from '../lib/safeFetch';
 import { formatCurrencyEGP } from '../lib/storeLogic';
 import type {
   OpticalLens,
@@ -123,8 +124,14 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
 
   useEffect(() => {
     fetch('/api/admin/auth-status')
-      .then((r) => r.json())
-      .then((d: { mode: 'unclaimed' | 'claimed' | 'env' }) => setAuthMode(d.mode))
+      .then((r) => readJsonSafe<{ mode: 'unclaimed' | 'claimed' | 'env' }>(r))
+      .then((parsed) => {
+        if (parsed.ok && parsed.isJson && parsed.data?.mode) {
+          setAuthMode(parsed.data.mode);
+        } else {
+          setAuthMode('claimed');
+        }
+      })
       .catch(() => setAuthMode('claimed'));
   }, []);
 
@@ -150,15 +157,26 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
         setToken(null);
         return;
       }
-      const [prodData, lensData, ordData, storeData] = await Promise.all([
-        prodRes.json(),
-        lensRes.json(),
-        ordRes.json(),
-        storeRes.json(),
+      const [prodParsed, lensParsed, ordParsed, storeParsed] = await Promise.all([
+        readJsonSafe<Product[]>(prodRes),
+        readJsonSafe<OpticalLens[]>(lensRes),
+        readJsonSafe<OrderRecord[]>(ordRes),
+        readJsonSafe<StoreSettings>(storeRes),
       ]);
-      setProducts(prodData);
-      setLenses(lensData);
-      setOrders(ordData);
+      if (
+        !prodParsed.isJson ||
+        !lensParsed.isJson ||
+        !ordParsed.isJson ||
+        !storeParsed.isJson ||
+        !storeParsed.data
+      ) {
+        setErrorMessage('تعذر تحميل بيانات لوحة التحكم من الخادم.');
+        return;
+      }
+      const storeData = storeParsed.data;
+      setProducts(Array.isArray(prodParsed.data) ? prodParsed.data : []);
+      setLenses(Array.isArray(lensParsed.data) ? lensParsed.data : []);
+      setOrders(Array.isArray(ordParsed.data) ? ordParsed.data : []);
       setStoreForm({
         ...storeData,
         storyBeats:
@@ -184,14 +202,18 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: passwordInput }),
       });
-      const data = (await res.json()) as { token?: string; error?: string };
-      if (!res.ok || !data.token) {
-        setAuthError(data.error || 'فشل تسجيل الدخول');
+      const parsed = await readJsonSafe<{ token?: string; error?: string }>(res);
+      if (!parsed.isJson) {
+        setAuthError('خادم الإدارة (/api) غير متاح على هذه الاستضافة الثابتة.');
         return;
       }
-      setToken(data.token);
+      if (!parsed.ok || !parsed.data?.token) {
+        setAuthError(parsed.data?.error || 'فشل تسجيل الدخول');
+        return;
+      }
+      setToken(parsed.data.token);
       setPasswordInput('');
-      await loadAdminData(data.token);
+      await loadAdminData(parsed.data.token);
     } catch {
       setAuthError('حدث خطأ أثناء الاتصال بالخادم.');
     }
@@ -248,12 +270,12 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       headers: authHeaders(token),
       body: form,
     });
-    const data = (await res.json()) as { url?: string; error?: string };
-    if (!res.ok || !data.url) {
-      setErrorMessage(data.error || 'فشل رفع الصورة');
+    const parsed = await readJsonSafe<{ url?: string; error?: string }>(res);
+    if (!parsed.isJson || !parsed.ok || !parsed.data?.url) {
+      setErrorMessage(parsed.data?.error || 'فشل رفع الصورة');
       return null;
     }
-    return data.url;
+    return parsed.data.url;
   };
 
   const handleUpload3DModel = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -267,12 +289,12 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       headers: authHeaders(token),
       body: form,
     });
-    const data = (await res.json()) as { url?: string; error?: string };
-    if (!res.ok || !data.url) {
-      setErrorMessage(data.error || 'فشل رفع ملف 3D');
+    const parsed = await readJsonSafe<{ url?: string; error?: string }>(res);
+    if (!parsed.isJson || !parsed.ok || !parsed.data?.url) {
+      setErrorMessage(parsed.data?.error || 'فشل رفع ملف 3D');
       return;
     }
-    setStoreForm({ ...storeForm, heroModelUrl: data.url });
+    setStoreForm({ ...storeForm, heroModelUrl: parsed.data.url });
     setStatusMessage('تم رفع نموذج النظارة 3D بنجاح، اضغط حفظ بيانات المحل لتثبيته.');
   };
 
@@ -392,15 +414,15 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = (await res.json()) as Product & { error?: string };
-    if (!res.ok) {
-      setErrorMessage(data.error || 'تعذر حفظ المنتج');
+    const parsed = await readJsonSafe<Product & { error?: string }>(res);
+    if (!parsed.isJson || !parsed.ok || !parsed.data) {
+      setErrorMessage(parsed.data?.error || 'تعذر حفظ المنتج');
       return;
     }
 
     if (firebaseUser) {
       try {
-        await saveFirestoreProduct(data);
+        await saveFirestoreProduct(parsed.data);
       } catch {
         // Firestore sync error surfaced on Cloud tab if not primary admin
       }
@@ -481,15 +503,15 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = (await res.json()) as OpticalLens & { error?: string };
-    if (!res.ok) {
-      setErrorMessage(data.error || 'تعذر حفظ العدسة');
+    const parsed = await readJsonSafe<OpticalLens & { error?: string }>(res);
+    if (!parsed.isJson || !parsed.ok || !parsed.data) {
+      setErrorMessage(parsed.data?.error || 'تعذر حفظ العدسة');
       return;
     }
 
     if (firebaseUser) {
       try {
-        await saveFirestoreLens(data);
+        await saveFirestoreLens(parsed.data);
       } catch {
         // ignore if not primary admin
       }
@@ -542,16 +564,16 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       method: 'POST',
       headers: authHeaders(token),
     });
-    const data = (await res.json()) as {
+    const parsed = await readJsonSafe<{
       status?: string;
       externalSyncStatus?: string;
       error?: string;
-    };
-    if (!res.ok) {
-      setErrorMessage(data.error || 'تعذر مزامنة الطلب');
+    }>(res);
+    if (!parsed.isJson || !parsed.ok || !parsed.data) {
+      setErrorMessage(parsed.data?.error || 'تعذر مزامنة الطلب');
       return;
     }
-    const syncState = data.externalSyncStatus || data.status;
+    const syncState = parsed.data.externalSyncStatus || parsed.data.status;
     setStatusMessage(
       syncState === 'synced'
         ? 'تم إرسال الطلب بنجاح إلى لوحة التحكم الخارجية.'
