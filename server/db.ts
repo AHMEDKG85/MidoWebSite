@@ -34,6 +34,7 @@ export function initDatabase(): void {
       whatsapp TEXT NOT NULL,
       working_hours TEXT NOT NULL,
       external_admin_url TEXT NOT NULL DEFAULT '',
+      home_content_json TEXT NOT NULL DEFAULT '{}',
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -46,6 +47,7 @@ export function initDatabase(): void {
     CREATE TABLE IF NOT EXISTS products (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       slug TEXT NOT NULL UNIQUE,
+      external_key TEXT NOT NULL DEFAULT '',
       name TEXT NOT NULL,
       category TEXT NOT NULL CHECK (category IN ('prescription', 'sunglasses', 'contact_lenses', 'accessories')),
       price REAL NOT NULL CHECK (price >= 0),
@@ -72,6 +74,7 @@ export function initDatabase(): void {
 
     CREATE TABLE IF NOT EXISTS lenses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      external_key TEXT NOT NULL DEFAULT '',
       name TEXT NOT NULL,
       subtitle TEXT NOT NULL,
       price REAL NOT NULL CHECK (price >= 0),
@@ -118,8 +121,17 @@ export function initDatabase(): void {
     'external_admin_url',
     "TEXT NOT NULL DEFAULT ''",
   );
+  ensureColumn('store_settings', 'home_content_json', "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn('products', 'allow_preorder', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('products', 'preorder_note', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('products', 'external_key', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('lenses', 'external_key', "TEXT NOT NULL DEFAULT ''");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_products_external_key
+      ON products(external_key) WHERE external_key <> '';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_lenses_external_key
+      ON lenses(external_key) WHERE external_key <> '';
+  `);
   ensureColumn('orders', 'invoice_number', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('orders', 'idempotency_hash', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('orders', 'order_type', "TEXT NOT NULL DEFAULT 'standard'");
@@ -547,6 +559,7 @@ export function getStoreSettings(): StoreSettings {
         whatsapp: string;
         working_hours: string;
         external_admin_url?: string;
+        home_content_json?: string;
       }
     | undefined;
 
@@ -576,6 +589,28 @@ export function getStoreSettings(): StoreSettings {
     parsedBeats = DEFAULT_STORY_BEATS;
   }
 
+  let homeContent: Partial<StoreSettings> = {};
+  try {
+    const parsed = JSON.parse(row.home_content_json || '{}') as Partial<StoreSettings>;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      homeContent = {
+        heroTitle: typeof parsed.heroTitle === 'string' ? parsed.heroTitle : undefined,
+        heroImageUrl: typeof parsed.heroImageUrl === 'string' ? parsed.heroImageUrl : undefined,
+        aboutTitle: typeof parsed.aboutTitle === 'string' ? parsed.aboutTitle : undefined,
+        featuredTitle: typeof parsed.featuredTitle === 'string' ? parsed.featuredTitle : undefined,
+        featuredSubtitle:
+          typeof parsed.featuredSubtitle === 'string' ? parsed.featuredSubtitle : undefined,
+        locationTitle: typeof parsed.locationTitle === 'string' ? parsed.locationTitle : undefined,
+        locationText: typeof parsed.locationText === 'string' ? parsed.locationText : undefined,
+        homeDepartments: Array.isArray(parsed.homeDepartments)
+          ? parsed.homeDepartments
+          : undefined,
+      };
+    }
+  } catch {
+    homeContent = {};
+  }
+
   return {
     storeName: row.store_name,
     tagline: row.tagline,
@@ -588,6 +623,7 @@ export function getStoreSettings(): StoreSettings {
     whatsapp: row.whatsapp,
     workingHours: row.working_hours,
     externalAdminUrl: row.external_admin_url || '',
+    ...homeContent,
   };
 }
 
@@ -840,14 +876,14 @@ export function recordDeletedOrderCodes(orderCodes: string[]): void {
     'INSERT OR REPLACE INTO deleted_order_codes (order_code, deleted_at) VALUES (?, datetime(\'now\'))',
   );
   for (const raw of orderCodes) {
-    const code = raw.trim();
+    const code = raw.trim().toUpperCase();
     if (code) stmt.run(code);
   }
 }
 
 export function listDeletedOrderCodes(): string[] {
   const rows = db
-    .prepare('SELECT order_code FROM deleted_order_codes ORDER BY deleted_at DESC LIMIT 200')
+    .prepare('SELECT order_code FROM deleted_order_codes ORDER BY deleted_at DESC')
     .all() as Array<{ order_code: string }>;
   return rows.map((r) => r.order_code);
 }

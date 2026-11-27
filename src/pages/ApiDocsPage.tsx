@@ -29,12 +29,12 @@ const ENDPOINTS: EndpointSpec[] = [
   {
     method: 'GET',
     path: '/api/external/store',
-    summary: 'جلب بيانات المحل الحالية (الاسم، لمحة عن المحل، أرقام الهاتف، العنوان، رابط Vercel).',
+    summary: 'جلب بيانات المحل والصفحة الرئيسية القابلة للتحرير (العناوين، الصور، الأقسام، العنوان ووسائل التواصل).',
   },
   {
     method: 'PUT',
     path: '/api/external/store',
-    summary: 'تحديث بيانات المحل، أرقام التواصل، ساعات العمل، ولمحات العرض 3D.',
+    summary: 'تحديث بيانات المحل ومحتوى الصفحة الرئيسية وصورها وبطاقاتها، مع أرقام التواصل وساعات العمل.',
     sampleBody: `{
   "storeName": "ميدو للبصريات | MIDO OPTICS",
   "tagline": "حرفية بصرية تجمع بين دقة القياس وأناقة الإطار",
@@ -44,7 +44,15 @@ const ENDPOINTS: EndpointSpec[] = [
   "phones": ["اكتب رقم الهاتف الحقيقي"],
   "whatsapp": "اكتب رقم واتساب الحقيقي",
   "workingHours": "يومياً من 11 صباحاً حتى 11 مساءً",
-  "externalAdminUrl": ""
+  "externalAdminUrl": "",
+  "heroTitle": "رؤية واضحة بتصميم يليق بملامحك",
+  "heroImageUrl": "",
+  "aboutTitle": "عن المحل ورؤيتنا",
+  "featuredTitle": "إصدارات مختارة",
+  "featuredSubtitle": "تشكيلة منتقاة من أحدث الإطارات",
+  "locationTitle": "موقع المحل وأرقام التواصل",
+  "locationText": "نرحب بكم في فرعنا...",
+  "homeDepartments": []
 }`,
   },
   {
@@ -112,6 +120,17 @@ const ENDPOINTS: EndpointSpec[] = [
     method: 'DELETE',
     path: '/api/external/lenses/:id',
     summary: 'حذف نوع عدسة طبية.',
+  },
+  {
+    method: 'GET',
+    path: '/api/external/deleted-orders',
+    summary: 'جلب أكواد الطلبات المحذوفة التي يجب أن تظل محذوفة بعد المزامنة.',
+  },
+  {
+    method: 'POST',
+    path: '/api/external/deleted-orders',
+    summary: 'مزامنة أكواد الحذف الدائمة بين لوحة الخدمات وقاعدة الموقع.',
+    sampleBody: `{ "orderCodes": ["MDO-ABC123"] }`,
   },
   {
     method: 'GET',

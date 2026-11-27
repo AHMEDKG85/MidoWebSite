@@ -84,6 +84,16 @@ export async function fetchFirestoreStoreSettings(): Promise<StoreSettings | nul
       whatsapp: String(data.whatsapp || ''),
       workingHours: String(data.workingHours || ''),
       externalAdminUrl: String(data.externalAdminUrl || ''),
+      heroTitle: typeof data.heroTitle === 'string' ? data.heroTitle : undefined,
+      heroImageUrl: typeof data.heroImageUrl === 'string' ? data.heroImageUrl : undefined,
+      aboutTitle: typeof data.aboutTitle === 'string' ? data.aboutTitle : undefined,
+      featuredTitle: typeof data.featuredTitle === 'string' ? data.featuredTitle : undefined,
+      featuredSubtitle: typeof data.featuredSubtitle === 'string' ? data.featuredSubtitle : undefined,
+      locationTitle: typeof data.locationTitle === 'string' ? data.locationTitle : undefined,
+      locationText: typeof data.locationText === 'string' ? data.locationText : undefined,
+      homeDepartments: Array.isArray(data.homeDepartments)
+        ? (data.homeDepartments as StoreSettings['homeDepartments'])
+        : undefined,
     };
   } catch (err) {
     console.warn('[firestore] Unable to read store_settings/main:', err);
@@ -328,8 +338,25 @@ export async function saveFirestoreStoreSettings(settings: StoreSettings): Promi
       whatsapp: (settings.whatsapp || '').slice(0, 30),
       workingHours: settings.workingHours.slice(0, 200),
       externalAdminUrl: (settings.externalAdminUrl || '').slice(0, 300),
+      ...(settings.heroTitle !== undefined ? { heroTitle: settings.heroTitle.slice(0, 180) } : {}),
+      ...(settings.heroImageUrl !== undefined ? { heroImageUrl: settings.heroImageUrl.slice(0, 120_000) } : {}),
+      ...(settings.aboutTitle !== undefined ? { aboutTitle: settings.aboutTitle.slice(0, 140) } : {}),
+      ...(settings.featuredTitle !== undefined ? { featuredTitle: settings.featuredTitle.slice(0, 140) } : {}),
+      ...(settings.featuredSubtitle !== undefined ? { featuredSubtitle: settings.featuredSubtitle.slice(0, 300) } : {}),
+      ...(settings.locationTitle !== undefined ? { locationTitle: settings.locationTitle.slice(0, 140) } : {}),
+      ...(settings.locationText !== undefined ? { locationText: settings.locationText.slice(0, 1000) } : {}),
+      ...(settings.homeDepartments !== undefined
+        ? {
+            homeDepartments: settings.homeDepartments.slice(0, 6).map((section) => ({
+              ...section,
+              title: section.title.slice(0, 100),
+              subtitle: section.subtitle.slice(0, 240),
+              imageUrl: section.imageUrl.slice(0, 80_000),
+            })),
+          }
+        : {}),
       updatedAt: serverTimestamp(),
-    });
+    }, { merge: true });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }

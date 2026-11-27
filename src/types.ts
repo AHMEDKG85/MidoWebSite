@@ -10,6 +10,16 @@ export interface StoryBeat {
   body: string;
 }
 
+export type HomeDepartmentPage = 'optical' | 'sunglasses' | 'contacts' | 'accessories';
+
+export interface HomeDepartment {
+  id: string;
+  title: string;
+  subtitle: string;
+  page: HomeDepartmentPage;
+  imageUrl: string;
+}
+
 export interface ProductVariant {
   id: number;
   productId: number;
@@ -62,6 +72,14 @@ export interface StoreSettings {
   whatsapp: string;
   workingHours: string;
   externalAdminUrl: string;
+  heroTitle?: string;
+  heroImageUrl?: string;
+  aboutTitle?: string;
+  featuredTitle?: string;
+  featuredSubtitle?: string;
+  locationTitle?: string;
+  locationText?: string;
+  homeDepartments?: HomeDepartment[];
 }
 
 export type OrderType = 'standard' | 'preorder';
