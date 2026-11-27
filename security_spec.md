@@ -6,7 +6,7 @@
 3. **PII & Prescription Isolation**: Customer orders (`/orders/{orderId}`) contain sensitive PII (`customerName`, `customerPhone`, `customerAddress`) and medical eye prescription measurements (`OD/OS SPH, CYL, AXIS, ADD, IPD`, prescription photo URL). Public `get` and `list` on `/orders` MUST always return `PERMISSION_DENIED`. Only verified admins (or the signed-in owner matching `resource.data.userId`) may read an order.
 4. **Checkout State Enforcement**: Any newly created order MUST start with `status == 'pending'`, `paymentMethod == 'cash_on_delivery'`, `createdAt == request.time`, `updatedAt == request.time`, bounded string lengths, and bounded `items` array (`1..20`).
 5. **Immutable Audit Fields & Terminal States**: `createdAt`, `orderCode`, `invoiceNumber`, and `userId` are immutable once an order is created. Non-admins cannot update or delete orders.
-6. **Privilege Escalation Prevention**: Only the primary verified admin (`a3972098@gmail.com` with `email_verified == true`) can add or remove entries in `/admins/{userId}`.
+6. **Privilege Escalation Prevention**: Only verified primary store admins (`a3972098@gmail.com`, `ah429034@gmail.com`, `ahmeddres66@gmail.com`, `m64152228@gmail.com` with `email_verified == true`) can add or remove entries in `/admins/{userId}`.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads
 1. **Ghost Field Injection on Order Create**: `{ ..., isVerified: true, discountOverride: 100 }` -> Rejected by `keys().hasOnly(...)`.

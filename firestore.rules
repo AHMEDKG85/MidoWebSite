@@ -33,7 +33,13 @@ service cloud.firestore {
     }
 
     function isPrimaryAdmin() {
-      return isEmailVerified() && request.auth.token.email == 'a3972098@gmail.com';
+      return isEmailVerified() &&
+        request.auth.token.email in [
+          'a3972098@gmail.com',
+          'ah429034@gmail.com',
+          'ahmeddres66@gmail.com',
+          'm64152228@gmail.com'
+        ];
     }
 
     function isAdmin() {

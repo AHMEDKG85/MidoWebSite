@@ -100,10 +100,6 @@ export default function App() {
     }
   }, [cart]);
 
-  useEffect(() => {
-    testConnection().catch(() => false);
-  }, []);
-
   const fetchCatalogData = useCallback(async () => {
     setLoading(true);
     let baseStore: StoreSettings | null = null;
@@ -126,8 +122,11 @@ export default function App() {
       setLoading(false);
     }
 
-    // Overlay Cloud Firestore edits asynchronously without blocking storefront rendering
+    // Verify Cloud Firestore connectivity first, then overlay cloud edits asynchronously
     try {
+      const cloudAvailable = await testConnection();
+      if (!cloudAvailable) return;
+
       const [cloudStore, cloudProducts, cloudLenses] = await Promise.all([
         fetchFirestoreStoreSettings(),
         fetchFirestorePublishedProducts(),

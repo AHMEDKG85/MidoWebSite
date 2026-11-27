@@ -7,7 +7,9 @@ import {
   type Auth,
 } from 'firebase/auth';
 import {
+  disableNetwork,
   doc,
+  enableNetwork,
   getDocFromServer,
   getFirestore,
   initializeFirestore,
@@ -55,6 +57,7 @@ try {
         app,
         {
           experimentalForceLongPolling: true,
+          experimentalLongPollingOptions: { timeoutSeconds: 5 },
           ignoreUndefinedProperties: true,
         },
         firebaseConfig.firestoreDatabaseId,
@@ -75,6 +78,15 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export function isFirebaseReady(): boolean {
   return Boolean(db && auth);
+}
+
+export async function ensureFirestoreNetwork(): Promise<void> {
+  if (!db) return;
+  try {
+    await enableNetwork(db);
+  } catch {
+    // ignore if already enabled
+  }
 }
 
 export function handleFirestoreError(
@@ -107,35 +119,97 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+async function probeFirestoreRest(timeoutMs = 4500): Promise<boolean> {
+  if (!firebaseConfig?.projectId || !firebaseConfig?.firestoreDatabaseId || !firebaseConfig?.apiKey) {
+    return false;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      firebaseConfig.projectId,
+    )}/databases/${encodeURIComponent(
+      firebaseConfig.firestoreDatabaseId,
+    )}/documents:runQuery?key=${encodeURIComponent(firebaseConfig.apiKey)}`;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'products' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'published' },
+              op: 'EQUAL',
+              value: { booleanValue: true },
+            },
+          },
+          limit: 1,
+        },
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+let inFlightConnectionCheck: Promise<boolean> | null = null;
+
 export async function testConnection(): Promise<boolean> {
   if (!db) return false;
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     return false;
   }
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-    return true;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-        return true;
-      } catch (retryError) {
-        if (
-          retryError instanceof Error &&
-          retryError.message.includes('the client is offline')
-        ) {
-          console.error('Please check your Firebase configuration or network connection.');
-        }
-      }
+  if (inFlightConnectionCheck) {
+    return inFlightConnectionCheck;
+  }
+
+  inFlightConnectionCheck = (async () => {
+    const restReachable = await probeFirestoreRest();
+    if (!restReachable) {
+      return false;
     }
-    return false;
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    try {
+      await ensureFirestoreNetwork();
+      const sdkConnected = await Promise.race<boolean>([
+        getDocFromServer(doc(db!, 'test', 'connection')).then(() => true),
+        new Promise<boolean>((resolve) => {
+          // Guard before Firestore's 10s OnlineStateTimeout fires if Listen/channel is blocked
+          timeoutHandle = setTimeout(() => resolve(false), 7500);
+        }),
+      ]);
+
+      if (!sdkConnected) {
+        await disableNetwork(db!).catch(() => undefined);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('the client is offline')) {
+        await disableNetwork(db!).catch(() => undefined);
+      }
+      return false;
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+  })();
+
+  try {
+    return await inFlightConnectionCheck;
+  } finally {
+    inFlightConnectionCheck = null;
   }
 }
 
 export async function signInWithGoogleAdmin() {
   if (!auth) throw new Error('Firebase Auth غير مهيأ.');
+  await ensureFirestoreNetwork();
   const result = await signInWithPopup(auth, googleProvider);
   return result.user;
 }

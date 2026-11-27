@@ -9,6 +9,10 @@ test('Firestore rules enforce default deny, Eight Pillars helpers, and PII isola
   assert.ok(rulesSource.includes('match /{document=**} {\n      allow read, write: if false;'));
   assert.ok(rulesSource.includes('isValidId('));
   assert.ok(rulesSource.includes('request.auth.token.email_verified == true'));
+  assert.ok(rulesSource.includes("'a3972098@gmail.com'"));
+  assert.ok(rulesSource.includes("'ah429034@gmail.com'"));
+  assert.ok(rulesSource.includes("'ahmeddres66@gmail.com'"));
+  assert.ok(rulesSource.includes("'m64152228@gmail.com'"));
   assert.ok(rulesSource.includes("incoming().status == 'pending'"));
   assert.ok(rulesSource.includes("data.paymentMethod == 'cash_on_delivery'"));
   assert.ok(rulesSource.includes('resource.data.published == true || isAdmin()'));

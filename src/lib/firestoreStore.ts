@@ -22,7 +22,7 @@ import type {
   StoreSettings,
   StoryBeat,
 } from '../types';
-import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import { auth, db, ensureFirestoreNetwork, handleFirestoreError, OperationType } from './firebase';
 
 function safeSlugId(raw: string, fallbackPrefix: string): string {
   const cleaned = raw
@@ -163,6 +163,7 @@ function mapFirestoreLens(docId: string, data: Record<string, unknown>): Optical
 
 export async function createFirestoreOrder(order: OrderRecord): Promise<void> {
   if (!db) return;
+  await ensureFirestoreNetwork();
   const orderId = `ord-${safeSlugId(order.orderCode, 'ord')}`;
   const path = `orders/${orderId}`;
   try {
@@ -210,6 +211,7 @@ export async function createFirestoreOrder(order: OrderRecord): Promise<void> {
 
 export async function saveFirestoreStoreSettings(settings: StoreSettings): Promise<void> {
   if (!db) throw new Error('Firebase غير مهيأ.');
+  await ensureFirestoreNetwork();
   const path = 'store_settings/main';
   try {
     const beats =
@@ -244,6 +246,7 @@ export async function saveFirestoreStoreSettings(settings: StoreSettings): Promi
 
 export async function saveFirestoreProduct(product: Product): Promise<void> {
   if (!db) throw new Error('Firebase غير مهيأ.');
+  await ensureFirestoreNetwork();
   const slugId = safeSlugId(product.slug || `prod-${product.id}`, 'prod');
   const path = `products/${slugId}`;
   try {
@@ -277,6 +280,7 @@ export async function saveFirestoreProduct(product: Product): Promise<void> {
 
 export async function deleteFirestoreProduct(product: Product): Promise<void> {
   if (!db) return;
+  await ensureFirestoreNetwork();
   const slugId = safeSlugId(product.slug || `prod-${product.id}`, 'prod');
   const path = `products/${slugId}`;
   try {
@@ -288,6 +292,7 @@ export async function deleteFirestoreProduct(product: Product): Promise<void> {
 
 export async function saveFirestoreLens(lens: OpticalLens): Promise<void> {
   if (!db) throw new Error('Firebase غير مهيأ.');
+  await ensureFirestoreNetwork();
   const lensId = `lens-${lens.id}`;
   const path = `lenses/${lensId}`;
   try {
@@ -311,6 +316,7 @@ export async function saveFirestoreLens(lens: OpticalLens): Promise<void> {
 
 export async function deleteFirestoreLens(lensIdNum: number): Promise<void> {
   if (!db) return;
+  await ensureFirestoreNetwork();
   const lensId = `lens-${lensIdNum}`;
   const path = `lenses/${lensId}`;
   try {
@@ -322,6 +328,7 @@ export async function deleteFirestoreLens(lensIdNum: number): Promise<void> {
 
 export async function fetchFirestoreAdminOrders(): Promise<OrderRecord[]> {
   if (!db) return [];
+  await ensureFirestoreNetwork();
   const path = 'orders';
   try {
     const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
@@ -362,6 +369,7 @@ export async function updateFirestoreOrderStatus(
   status: OrderStatus,
 ): Promise<void> {
   if (!db) return;
+  await ensureFirestoreNetwork();
   const orderId = `ord-${safeSlugId(orderCode, 'ord')}`;
   const path = `orders/${orderId}`;
   try {
