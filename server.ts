@@ -1579,7 +1579,7 @@ async function startServer() {
 
   app.get('/api/external/orders', requireExternalSyncAuth, (req, res) => {
     const host = req.header('host');
-    const deletedCodes = new Set(listDeletedOrderCodes());
+    const deletedCodes = new Set(listDeletedOrderCodes().map((code) => String(code).trim().toUpperCase()));
     res.json(
       listOrders()
         .filter((order) => !deletedCodes.has(String(order.orderCode || '').trim().toUpperCase()))
