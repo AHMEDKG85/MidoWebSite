@@ -59,6 +59,23 @@ function timestampToIso(value: unknown): string {
   return new Date().toISOString();
 }
 
+export function resolveOrderImageUrl(rawUrl?: string): string {
+  const clean = (rawUrl || '').trim();
+  if (!clean) return '';
+  if (
+    clean.startsWith('data:') ||
+    clean.startsWith('https://') ||
+    clean.startsWith('http://')
+  ) {
+    return clean;
+  }
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const normalized = clean.startsWith('/') ? clean : `/${clean}`;
+    return `${window.location.origin}${normalized}`;
+  }
+  return clean;
+}
+
 export async function fetchFirestoreStoreSettings(): Promise<StoreSettings | null> {
   if (!db) return null;
   const path = 'store_settings/main';
@@ -98,6 +115,17 @@ export async function fetchFirestorePublishedProducts(): Promise<Product[] | nul
   }
 }
 
+export async function fetchFirestoreAllProducts(): Promise<Product[]> {
+  if (!db) return [];
+  await ensureFirestoreNetwork();
+  try {
+    const snap = await getDocs(collection(db, 'products'));
+    return snap.docs.map((d) => mapFirestoreProduct(d.id, d.data()));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, 'products');
+  }
+}
+
 export async function fetchFirestorePublishedLenses(): Promise<OpticalLens[] | null> {
   if (!db) return null;
   try {
@@ -109,6 +137,18 @@ export async function fetchFirestorePublishedLenses(): Promise<OpticalLens[] | n
   } catch (err) {
     console.warn('[firestore] Unable to list published lenses:', err);
     return null;
+  }
+}
+
+export async function fetchFirestoreAllLenses(): Promise<OpticalLens[]> {
+  if (!db) return [];
+  await ensureFirestoreNetwork();
+  try {
+    const snap = await getDocs(collection(db, 'lenses'));
+    const list = snap.docs.map((d) => mapFirestoreLens(d.id, d.data()));
+    return list.sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, 'lenses');
   }
 }
 
@@ -186,23 +226,29 @@ export async function createFirestoreOrder(
       customerAddress: order.customerAddress.trim().slice(0, 400),
       paymentMethod: 'cash_on_delivery' as const,
       notes: (order.notes || '').trim().slice(0, 600),
-      items: order.items.slice(0, 20).map((item) => ({
-        id: item.id,
-        productId: item.productId,
-        productSlug: item.productSlug,
-        productName: item.productName,
-        category: item.category,
-        variantId: item.variantId,
-        colorName: item.colorName,
-        colorHex: item.colorHex,
-        imageUrl: item.imageUrl,
-        framePrice: Number(item.framePrice) || 0,
-        lensId: item.lensId,
-        lensName: item.lensName,
-        lensPrice: Number(item.lensPrice) || 0,
-        quantity: Number(item.quantity) || 1,
-        orderType: item.orderType || order.orderType,
-      })),
+      items: order.items.slice(0, 20).map((item) => {
+        const resolvedImg = resolveOrderImageUrl(item.imageUrl || item.frameImageUrl);
+        return {
+          id: item.id,
+          productId: item.productId,
+          productSlug: item.productSlug,
+          productName: item.productName,
+          category: item.category,
+          variantId: item.variantId,
+          colorName: item.colorName,
+          colorHex: item.colorHex,
+          imageUrl: item.imageUrl || resolvedImg,
+          frameImageUrl: resolvedImg,
+          absoluteImageUrl: resolvedImg,
+          frameShape: item.frameShape || '',
+          framePrice: Number(item.framePrice) || 0,
+          lensId: item.lensId,
+          lensName: item.lensName,
+          lensPrice: Number(item.lensPrice) || 0,
+          quantity: Number(item.quantity) || 1,
+          orderType: item.orderType || order.orderType,
+        };
+      }),
       prescription: order.prescription,
       frameSubtotal: Number(order.frameSubtotal) || 0,
       lensSubtotal: Number(order.lensSubtotal) || 0,
@@ -224,7 +270,10 @@ export async function createFirestoreOrder(
         ),
       ]);
     } else {
-      await writePromise;
+      await Promise.race([
+        writePromise,
+        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+      ]);
     }
   } catch (err) {
     if (options?.throwOnError) {
@@ -366,6 +415,18 @@ export async function fetchFirestoreAdminOrders(): Promise<OrderRecord[]> {
       const frameSubtotal = Number(data.frameSubtotal || 0);
       const lensSubtotal = Number(data.lensSubtotal || 0);
       const total = Number(data.total || 0);
+      const rawItems = Array.isArray(data.items) ? data.items : [];
+      const items = rawItems.map((raw) => {
+        const it = raw as Record<string, unknown>;
+        const bestImg = String(it.imageUrl || it.frameImageUrl || it.absoluteImageUrl || '');
+        return {
+          ...it,
+          imageUrl: bestImg,
+          frameImageUrl: String(it.frameImageUrl || bestImg),
+          absoluteImageUrl: String(it.absoluteImageUrl || bestImg),
+        };
+      }) as OrderRecord['items'];
+
       return {
         id: idx + 1,
         orderCode: String(data.orderCode || d.id),
@@ -376,7 +437,7 @@ export async function fetchFirestoreAdminOrders(): Promise<OrderRecord[]> {
         customerAddress: String(data.customerAddress || ''),
         paymentMethod: 'cash_on_delivery',
         notes: String(data.notes || ''),
-        items: Array.isArray(data.items) ? data.items : [],
+        items,
         prescription: data.prescription || null,
         frameSubtotal,
         lensSubtotal,
@@ -385,6 +446,8 @@ export async function fetchFirestoreAdminOrders(): Promise<OrderRecord[]> {
         status: (data.status as OrderStatus) || 'pending',
         externalSyncStatus: data.externalSyncStatus || 'not_configured',
         createdAt: timestampToIso(data.createdAt),
+        firestoreDocId: d.id,
+        source: 'cloud',
       };
     });
   } catch (err) {
@@ -395,10 +458,11 @@ export async function fetchFirestoreAdminOrders(): Promise<OrderRecord[]> {
 export async function updateFirestoreOrderStatus(
   orderCode: string,
   status: OrderStatus,
+  firestoreDocId?: string,
 ): Promise<void> {
   if (!db) return;
   await ensureFirestoreNetwork();
-  const orderId = `ord-${safeSlugId(orderCode, 'ord')}`;
+  const orderId = firestoreDocId || `ord-${safeSlugId(orderCode, 'ord')}`;
   const path = `orders/${orderId}`;
   try {
     const snap = await getDoc(doc(db, 'orders', orderId));
@@ -409,6 +473,45 @@ export async function updateFirestoreOrderStatus(
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteFirestoreOrder(
+  orderCode: string,
+  firestoreDocId?: string,
+): Promise<void> {
+  if (!db) return;
+  await ensureFirestoreNetwork();
+  const candidates = new Set<string>();
+  if (firestoreDocId) candidates.add(firestoreDocId);
+  if (orderCode) {
+    candidates.add(`ord-${safeSlugId(orderCode, 'ord')}`);
+    candidates.add(orderCode);
+  }
+  for (const docId of candidates) {
+    const path = `orders/${docId}`;
+    try {
+      await deleteDoc(doc(db, 'orders', docId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+    }
+  }
+}
+
+export async function deleteAllFirestoreOrders(): Promise<number> {
+  if (!db) return 0;
+  await ensureFirestoreNetwork();
+  const path = 'orders';
+  try {
+    const snap = await getDocs(collection(db, 'orders'));
+    let deleted = 0;
+    for (const d of snap.docs) {
+      await deleteDoc(doc(db, 'orders', d.id));
+      deleted += 1;
+    }
+    return deleted;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
   }
 }
 

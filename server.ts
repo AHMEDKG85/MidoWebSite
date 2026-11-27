@@ -304,7 +304,13 @@ function isSafeWebhookUrl(rawUrl: string): URL | null {
 
 function buildAbsoluteAssetUrl(relOrAbs: string, reqHost?: string): string {
   if (!relOrAbs) return '';
-  if (relOrAbs.startsWith('https://') || relOrAbs.startsWith('http://')) return relOrAbs;
+  if (
+    relOrAbs.startsWith('data:') ||
+    relOrAbs.startsWith('https://') ||
+    relOrAbs.startsWith('http://')
+  ) {
+    return relOrAbs;
+  }
   const base =
     (process.env.APP_URL || '').trim().replace(/\/+$/, '') ||
     (reqHost ? `https://${reqHost}` : '');
@@ -337,19 +343,28 @@ async function dispatchOrderToExternalAdmin(
       address: order.customerAddress,
       notes: order.notes,
     },
-    items: order.items.map((item) => ({
-      productId: item.productId,
-      productName: item.productName,
-      category: item.category,
-      colorName: item.colorName,
-      quantity: item.quantity,
-      framePrice: item.framePrice,
-      lensName: item.lensName,
-      lensPrice: item.lensPrice,
-      unitTotal: item.framePrice + item.lensPrice,
-      lineTotal: (item.framePrice + item.lensPrice) * item.quantity,
-      orderType: item.orderType || order.orderType,
-    })),
+    items: order.items.map((item) => {
+      const absFrameImg = buildAbsoluteAssetUrl(item.imageUrl || item.frameImageUrl || '', reqHost);
+      return {
+        productId: item.productId,
+        productSlug: item.productSlug,
+        productName: item.productName,
+        category: item.category,
+        colorName: item.colorName,
+        colorHex: item.colorHex,
+        frameShape: item.frameShape || '',
+        imageUrl: item.imageUrl || absFrameImg,
+        frameImageUrl: absFrameImg,
+        absoluteImageUrl: absFrameImg,
+        quantity: item.quantity,
+        framePrice: item.framePrice,
+        lensName: item.lensName,
+        lensPrice: item.lensPrice,
+        unitTotal: item.framePrice + item.lensPrice,
+        lineTotal: (item.framePrice + item.lensPrice) * item.quantity,
+        orderType: item.orderType || order.orderType,
+      };
+    }),
     prescription: order.prescription
       ? {
           mode: order.prescription.mode,
@@ -515,6 +530,7 @@ async function startServer() {
       return;
     }
     const payload = parsed.data;
+    const reqHost = req.header('host');
 
     try {
       const createdOrder = db.transaction(() => {
@@ -596,6 +612,7 @@ async function startServer() {
           }
 
           const images = JSON.parse(variantRow.images_json) as string[];
+          const frameImg = images[0] || '';
           frameSubtotal += productRow.price * item.quantity;
           lensSubtotal += lensPrice * item.quantity;
 
@@ -608,7 +625,9 @@ async function startServer() {
             variantId: variantRow.id,
             colorName: variantRow.color_name,
             colorHex: variantRow.color_hex,
-            imageUrl: images[0] || '',
+            imageUrl: frameImg,
+            frameImageUrl: frameImg,
+            absoluteImageUrl: buildAbsoluteAssetUrl(frameImg, reqHost),
             framePrice: productRow.price,
             lensId,
             lensName,
@@ -701,6 +720,17 @@ async function startServer() {
       res.status(201).json({ ...createdOrder, externalSyncStatus: syncResult });
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
+      if (
+        msg.startsWith('PRODUCT_NOT_FOUND:') ||
+        msg.startsWith('VARIANT_NOT_FOUND:') ||
+        msg.startsWith('LENS_NOT_FOUND:')
+      ) {
+        res.status(404).json({
+          code: 'CLOUD_CATALOG_FALLBACK',
+          error: 'المنتج مرتبط بالكتالوج السحابي، جاري التحويل للحفظ السحابي.',
+        });
+        return;
+      }
       if (msg.startsWith('OUT_OF_STOCK:')) {
         res.status(409).json({ error: `الكمية غير متوفرة حالياً للمنتج: ${msg.split(':')[1]}` });
         return;
@@ -1017,6 +1047,21 @@ async function startServer() {
     res.json({ status: syncResult, externalSyncStatus: syncResult });
   });
 
+  app.delete('/api/admin/orders/:id', requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'معرف الطلب غير صالح' });
+      return;
+    }
+    db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/admin/orders', requireAdmin, (_req, res) => {
+    const info = db.prepare('DELETE FROM orders').run();
+    res.json({ ok: true, deletedCount: info.changes });
+  });
+
   app.put('/api/admin/store', requireAdmin, (req, res) => {
     const parsed = storeSettingsSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1272,6 +1317,21 @@ async function startServer() {
     }
     db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(parsed.data.status, id);
     res.json({ ok: true });
+  });
+
+  app.delete('/api/external/orders/:id', requireExternalSyncAuth, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'Invalid order id' });
+      return;
+    }
+    db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/external/orders', requireExternalSyncAuth, (_req, res) => {
+    const info = db.prepare('DELETE FROM orders').run();
+    res.json({ ok: true, deletedCount: info.changes });
   });
 
   // Vite middleware in development or static dist in production

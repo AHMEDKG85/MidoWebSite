@@ -116,7 +116,21 @@ test('calculateCartTotals sums frame price, lens price, and extra items accurate
 
   const lines = buildInvoiceLines({ items });
   assert.equal(lines[0].lineTotal, 2600);
+  assert.equal(lines[0].imageUrl, '/img/tortoise-1.jpg');
+  assert.equal(lines[0].colorHex, '#7A4E2D');
   assert.equal(lines[1].lineTotal, 840);
+  assert.equal(lines[1].imageUrl, '/img/kit.jpg');
+
+  const fallbackLines = buildInvoiceLines({
+    items: [
+      {
+        ...items[0],
+        imageUrl: '',
+        frameImageUrl: 'https://example.com/frame-only.jpg',
+      },
+    ],
+  });
+  assert.equal(fallbackLines[0].imageUrl, 'https://example.com/frame-only.jpg');
 });
 
 test('validatePrescription validates OD/OS SPH/CYL/AXIS/ADD and IPD or uploaded photo', () => {

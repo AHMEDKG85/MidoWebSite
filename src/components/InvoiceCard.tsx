@@ -1,4 +1,5 @@
 import { Printer } from 'lucide-react';
+import { SmartImage } from './SmartImage';
 import { buildInvoiceLines, formatCurrencyEGP } from '../lib/storeLogic';
 import type { OrderRecord, StoreSettings } from '../types';
 
@@ -104,8 +105,27 @@ export function InvoiceCard({
             {lines.map((line, idx) => (
               <tr key={idx}>
                 <td className="py-3">
-                  <div className="font-bold text-[#141413]">{line.title}</div>
-                  <div className="text-[#6E6B64]">{line.subtitle}</div>
+                  <div className="flex items-center gap-3">
+                    {line.imageUrl && (
+                      <div className="w-14 h-11 rounded-lg overflow-hidden bg-[#ECEAE3] border border-[#141413]/10 shrink-0">
+                        <SmartImage
+                          src={line.imageUrl}
+                          alt={line.title}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    )}
+                    <div>
+                      <div className="font-bold text-[#141413] flex items-center gap-1.5">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full border border-[#141413]/20 shrink-0"
+                          style={{ backgroundColor: line.colorHex }}
+                        />
+                        <span>{line.title}</span>
+                      </div>
+                      <div className="text-[#6E6B64]">{line.subtitle}</div>
+                    </div>
+                  </div>
                 </td>
                 <td className="py-3 text-center font-mono tabular-nums">
                   {formatCurrencyEGP(line.framePrice)}

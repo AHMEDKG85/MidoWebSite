@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { InvoiceCard } from '../components/InvoiceCard';
 import { SmartImage } from '../components/SmartImage';
-import { createFirestoreOrder } from '../lib/firestoreStore';
+import { createFirestoreOrder, resolveOrderImageUrl } from '../lib/firestoreStore';
 import { generateClientOrderIdentifiers, readJsonSafe } from '../lib/safeFetch';
 import {
   calculateCartTotals,
@@ -194,29 +194,55 @@ export function CheckoutPage({
           customerAddress: customerAddress.trim(),
           notes: notes.trim(),
           orderType: totals.hasPreorderItem ? 'preorder' : 'standard',
-          items: cart.map((item) => ({
-            productId: item.productId,
-            variantId: item.variantId,
-            lensId: item.lensId,
-            quantity: item.quantity,
-            orderType: item.orderType || 'standard',
-          })),
+          items: cart.map((item) => {
+            const resolvedImg = resolveOrderImageUrl(item.imageUrl || item.frameImageUrl);
+            return {
+              productId: item.productId,
+              productSlug: item.productSlug,
+              productName: item.productName,
+              colorName: item.colorName,
+              colorHex: item.colorHex,
+              frameShape: item.frameShape,
+              imageUrl: item.imageUrl || resolvedImg,
+              frameImageUrl: resolvedImg,
+              absoluteImageUrl: resolvedImg,
+              framePrice: item.framePrice,
+              lensName: item.lensName,
+              lensPrice: item.lensPrice,
+              variantId: item.variantId,
+              lensId: item.lensId,
+              quantity: item.quantity,
+              orderType: item.orderType || 'standard',
+            };
+          }),
           prescription: prescriptionPayload,
         }),
       });
-      const parsed = await readJsonSafe<OrderRecord & { error?: string }>(res);
+      const parsed = await readJsonSafe<OrderRecord & { error?: string; code?: string }>(res);
       let finalOrder: OrderRecord;
 
-      if (parsed.isJson) {
+      const useCloudFallback =
+        !parsed.isJson || parsed.data?.code === 'CLOUD_CATALOG_FALLBACK';
+
+      if (!useCloudFallback) {
         if (!parsed.ok || !parsed.data) {
           throw new Error(parsed.data?.error || 'حدث خطأ أثناء تسجيل الطلب.');
         }
         finalOrder = parsed.data;
-        // Backup to Cloud Firestore so admin sees orders across devices
-        await createFirestoreOrder(finalOrder);
+        // Backup to Cloud Firestore in background so slow/offline Firestore never blocks Express invoice confirmation
+        void createFirestoreOrder(finalOrder);
       } else {
-        // Static hosting fallback (e.g., Vercel frontend without Express API): submit directly to Cloud Firestore
+        // Static hosting or cloud-added product fallback: submit directly to Cloud Firestore
         const { orderCode, invoiceNumber } = generateClientOrderIdentifiers();
+        const itemsWithImages = cart.map((item) => {
+          const resolvedImg = resolveOrderImageUrl(item.imageUrl || item.frameImageUrl);
+          return {
+            ...item,
+            imageUrl: item.imageUrl || resolvedImg,
+            frameImageUrl: resolvedImg,
+            absoluteImageUrl: resolvedImg,
+          };
+        });
         finalOrder = {
           id: Date.now(),
           orderCode,
@@ -227,7 +253,7 @@ export function CheckoutPage({
           customerAddress: customerAddress.trim(),
           paymentMethod: 'cash_on_delivery',
           notes: notes.trim(),
-          items: cart,
+          items: itemsWithImages,
           prescription: prescriptionPayload,
           frameSubtotal: totals.frameSubtotal,
           lensSubtotal: totals.lensSubtotal,

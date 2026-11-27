@@ -76,6 +76,8 @@ export interface CartItem {
   colorName: string;
   colorHex: string;
   imageUrl: string;
+  frameImageUrl?: string;
+  absoluteImageUrl?: string;
   framePrice: number;
   lensId: number | null;
   lensName: string | null;
@@ -129,4 +131,6 @@ export interface OrderRecord {
   status: OrderStatus;
   externalSyncStatus: ExternalSyncStatus;
   createdAt: string;
+  firestoreDocId?: string;
+  source?: 'local' | 'cloud' | 'both';
 }

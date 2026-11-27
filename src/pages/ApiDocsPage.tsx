@@ -116,13 +116,24 @@ const ENDPOINTS: EndpointSpec[] = [
   {
     method: 'GET',
     path: '/api/external/orders',
-    summary: 'جلب كافة الطلبات والفواتير (الإطار + العدسة + OD/OS SPH/CYL/AXIS/ADD و IPD + صورة الكشف).',
+    summary:
+      'جلب كافة الطلبات والفواتير (صور الشمبر imageUrl / frameImageUrl / absoluteImageUrl + العدسة + OD/OS SPH/CYL/AXIS/ADD و IPD + صورة الكشف).',
   },
   {
     method: 'PATCH',
     path: '/api/external/orders/:id/status',
     summary: 'تحديث حالة الطلب من لوحة التحكم الخارجية.',
     sampleBody: `{ "status": "confirmed" }`,
+  },
+  {
+    method: 'DELETE',
+    path: '/api/external/orders/:id',
+    summary: 'حذف طلب معيّن (برقم الطلب id أو بكود الطلب orderCode مثل MDO-...).',
+  },
+  {
+    method: 'DELETE',
+    path: '/api/external/orders',
+    summary: 'مسح جميع الطلبات المخزنة على الخادم المحلي للبدء على نظافة.',
   },
 ];
 
@@ -301,7 +312,20 @@ export function ApiDocsPage({ store, onNavigate }: ApiDocsPageProps) {
     "orderCode": "MDO-...",
     "invoiceNumber": "INV-...",
     "orderType": "standard | preorder",
-    "items": [{ "productName": "...", "lensName": "...", "framePrice": 1800, "lensPrice": 650 }],
+    "items": [
+      {
+        "productName": "...",
+        "colorName": "أسود",
+        "colorHex": "#141413",
+        "frameShape": "round",
+        "imageUrl": "https://.../frame.jpg",
+        "frameImageUrl": "https://.../frame.jpg",
+        "absoluteImageUrl": "https://.../frame.jpg",
+        "lensName": "...",
+        "framePrice": 1800,
+        "lensPrice": 650
+      }
+    ],
     "prescription": {
       "odSph": "-1.25", "odCyl": "-0.50", "odAxis": "90", "odAdd": "+1.50",
       "osSph": "-1.00", "osCyl": "-0.25", "osAxis": "85", "osAdd": "+1.50",

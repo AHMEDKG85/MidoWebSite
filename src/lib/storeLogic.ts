@@ -193,6 +193,8 @@ export function formatCurrencyEGP(amount: number): string {
 export interface InvoiceLine {
   title: string;
   subtitle: string;
+  imageUrl: string;
+  colorHex: string;
   framePrice: number;
   lensPrice: number;
   quantity: number;
@@ -205,6 +207,8 @@ export function buildInvoiceLines(order: Pick<OrderRecord, 'items'>): InvoiceLin
     return {
       title: `${item.productName} (${item.colorName})`,
       subtitle: item.lensName ? `عدسات: ${item.lensName}` : 'بدون عدسات طبية',
+      imageUrl: item.imageUrl || item.frameImageUrl || '',
+      colorHex: item.colorHex || '#141413',
       framePrice: item.framePrice,
       lensPrice: item.lensPrice,
       quantity: item.quantity,

@@ -22,8 +22,14 @@ import {
   signOutFirebase,
 } from '../lib/firebase';
 import {
+  deleteAllFirestoreOrders,
   deleteFirestoreLens,
+  deleteFirestoreOrder,
   deleteFirestoreProduct,
+  fetchFirestoreAdminOrders,
+  fetchFirestoreAllLenses,
+  fetchFirestoreAllProducts,
+  fetchFirestoreStoreSettings,
   saveFirestoreLens,
   saveFirestoreProduct,
   saveFirestoreStoreSettings,
@@ -88,6 +94,8 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
   const [statusMessage, setStatusMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [invoiceOrder, setInvoiceOrder] = useState<OrderRecord | null>(null);
+  const [confirmClearOrders, setConfirmClearOrders] = useState(false);
+  const [deletingOrders, setDeletingOrders] = useState(false);
 
   // Product Form State
   const [editingProductId, setEditingProductId] = useState<number | null>(null);
@@ -145,50 +153,122 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
     Authorization: `Bearer ${t}`,
   });
 
-  const loadAdminData = async (activeToken: string) => {
+  const mergeOrders = (localList: OrderRecord[], cloudList: OrderRecord[]): OrderRecord[] => {
+    const byCode = new Map<string, OrderRecord>();
+    for (const o of cloudList) {
+      byCode.set(o.orderCode, { ...o, source: 'cloud' });
+    }
+    for (const o of localList) {
+      const existingCloud = byCode.get(o.orderCode);
+      if (existingCloud) {
+        byCode.set(o.orderCode, {
+          ...o,
+          firestoreDocId: existingCloud.firestoreDocId,
+          source: 'both',
+        });
+      } else {
+        byCode.set(o.orderCode, { ...o, source: 'local' });
+      }
+    }
+    return Array.from(byCode.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+  };
+
+  const loadCloudData = async (localOrdersSnapshot?: OrderRecord[]) => {
     try {
-      const [prodRes, lensRes, ordRes, storeRes] = await Promise.all([
-        fetch('/api/admin/products', { headers: authHeaders(activeToken) }),
-        fetch('/api/admin/lenses', { headers: authHeaders(activeToken) }),
-        fetch('/api/admin/orders', { headers: authHeaders(activeToken) }),
-        fetch('/api/store'),
+      const [cloudOrders, cloudProducts, cloudLenses, cloudStore] = await Promise.all([
+        fetchFirestoreAdminOrders(),
+        fetchFirestoreAllProducts(),
+        fetchFirestoreAllLenses(),
+        fetchFirestoreStoreSettings(),
       ]);
-      if (prodRes.status === 401) {
-        setToken(null);
-        return;
+      setOrders((prev) => mergeOrders(localOrdersSnapshot ?? prev.filter((o) => o.source !== 'cloud'), cloudOrders));
+      if (!token) {
+        if (cloudProducts.length > 0) setProducts(cloudProducts);
+        if (cloudLenses.length > 0) setLenses(cloudLenses);
+        if (cloudStore && cloudStore.storeName) {
+          setStoreForm({
+            ...cloudStore,
+            storyBeats:
+              cloudStore.storyBeats && cloudStore.storyBeats.length > 0
+                ? cloudStore.storyBeats
+                : [DEFAULT_BEAT],
+            heroModelUrl: cloudStore.heroModelUrl || '',
+            externalAdminUrl:
+              cloudStore.externalAdminUrl || 'https://mido-optics-servies.vercel.app',
+          });
+          setPhonesText((cloudStore.phones || []).join('، '));
+        }
       }
-      const [prodParsed, lensParsed, ordParsed, storeParsed] = await Promise.all([
-        readJsonSafe<Product[]>(prodRes),
-        readJsonSafe<OpticalLens[]>(lensRes),
-        readJsonSafe<OrderRecord[]>(ordRes),
-        readJsonSafe<StoreSettings>(storeRes),
-      ]);
-      if (
-        !prodParsed.isJson ||
-        !lensParsed.isJson ||
-        !ordParsed.isJson ||
-        !storeParsed.isJson ||
-        !storeParsed.data
-      ) {
-        setErrorMessage('تعذر تحميل بيانات لوحة التحكم من الخادم.');
-        return;
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error
+          ? err.message
+          : 'تعذر تحميل البيانات السحابية من Firebase.',
+      );
+    }
+  };
+
+  useEffect(() => {
+    if (!firebaseUser) return;
+    void loadCloudData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firebaseUser]);
+
+  const loadAdminData = async (activeToken: string | null) => {
+    let localOrders: OrderRecord[] = [];
+    if (activeToken) {
+      try {
+        const [prodRes, lensRes, ordRes, storeRes] = await Promise.all([
+          fetch('/api/admin/products', { headers: authHeaders(activeToken) }),
+          fetch('/api/admin/lenses', { headers: authHeaders(activeToken) }),
+          fetch('/api/admin/orders', { headers: authHeaders(activeToken) }),
+          fetch('/api/store'),
+        ]);
+        if (prodRes.status === 401) {
+          setToken(null);
+          return;
+        }
+        const [prodParsed, lensParsed, ordParsed, storeParsed] = await Promise.all([
+          readJsonSafe<Product[]>(prodRes),
+          readJsonSafe<OpticalLens[]>(lensRes),
+          readJsonSafe<OrderRecord[]>(ordRes),
+          readJsonSafe<StoreSettings>(storeRes),
+        ]);
+        if (
+          !prodParsed.isJson ||
+          !lensParsed.isJson ||
+          !ordParsed.isJson ||
+          !storeParsed.isJson ||
+          !storeParsed.data
+        ) {
+          setErrorMessage('تعذر تحميل بيانات لوحة التحكم من الخادم.');
+          return;
+        }
+        const storeData = storeParsed.data;
+        localOrders = Array.isArray(ordParsed.data) ? ordParsed.data : [];
+        setProducts(Array.isArray(prodParsed.data) ? prodParsed.data : []);
+        setLenses(Array.isArray(lensParsed.data) ? lensParsed.data : []);
+        setOrders(localOrders.map((o) => ({ ...o, source: 'local' as const })));
+        setStoreForm({
+          ...storeData,
+          storyBeats:
+            Array.isArray(storeData.storyBeats) && storeData.storyBeats.length > 0
+              ? storeData.storyBeats
+              : [DEFAULT_BEAT],
+          heroModelUrl: storeData.heroModelUrl || '',
+          externalAdminUrl:
+            storeData.externalAdminUrl || 'https://mido-optics-servies.vercel.app',
+        });
+        setPhonesText((storeData.phones || []).join('، '));
+      } catch {
+        setErrorMessage('تعذر تحميل بيانات لوحة التحكم.');
       }
-      const storeData = storeParsed.data;
-      setProducts(Array.isArray(prodParsed.data) ? prodParsed.data : []);
-      setLenses(Array.isArray(lensParsed.data) ? lensParsed.data : []);
-      setOrders(Array.isArray(ordParsed.data) ? ordParsed.data : []);
-      setStoreForm({
-        ...storeData,
-        storyBeats:
-          Array.isArray(storeData.storyBeats) && storeData.storyBeats.length > 0
-            ? storeData.storyBeats
-            : [DEFAULT_BEAT],
-        heroModelUrl: storeData.heroModelUrl || '',
-        externalAdminUrl: storeData.externalAdminUrl || 'https://mido-optics-servies.vercel.app',
-      });
-      setPhonesText((storeData.phones || []).join('، '));
-    } catch {
-      setErrorMessage('تعذر تحميل بيانات لوحة التحكم.');
+    }
+
+    if (firebaseUser) {
+      await loadCloudData(localOrders);
     }
   };
 
@@ -204,7 +284,9 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       });
       const parsed = await readJsonSafe<{ token?: string; error?: string }>(res);
       if (!parsed.isJson) {
-        setAuthError('خادم الإدارة (/api) غير متاح على هذه الاستضافة الثابتة.');
+        setAuthError(
+          'خادم الإدارة (/api) غير متاح على هذه الاستضافة الثابتة. سجل الدخول بحساب Google بالأسفل لإدارة الطلبات والمنتجات عبر السحابة.',
+        );
         return;
       }
       if (!parsed.ok || !parsed.data?.token) {
@@ -221,12 +303,15 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
 
   const handleGoogleSignIn = async () => {
     setErrorMessage('');
+    setAuthError('');
     setStatusMessage('');
     try {
       const user = await signInWithGoogleAdmin();
       setStatusMessage(`تم ربط حساب Firebase بنجاح (${user.email}).`);
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : 'تعذر تسجيل الدخول عبر Google');
+      const msg = err instanceof Error ? err.message : 'تعذر تسجيل الدخول عبر Google';
+      setErrorMessage(msg);
+      setAuthError(msg);
     }
   };
 
@@ -380,7 +465,7 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
 
   const handleSaveProduct = async (e: FormEvent) => {
     e.preventDefault();
-    if (!token) return;
+    if (!token && !firebaseUser) return;
     setErrorMessage('');
     setStatusMessage('');
 
@@ -396,35 +481,55 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       published: pPublished,
       allowPreorder: pAllowPreorder,
       preorderNote: pPreorderNote.trim(),
-      variants: pVariants.map((v) => ({
+      variants: pVariants.map((v, idx) => ({
+        id: idx + 1,
+        productId: editingProductId || Date.now(),
         colorName: v.colorName.trim(),
         colorHex: v.colorHex,
         stock: Math.max(0, Number(v.stock) || 0),
         images: v.images.filter((img) => img.trim().length > 0),
+        sortOrder: idx,
       })),
     };
 
-    const url = editingProductId
-      ? `/api/admin/products/${editingProductId}`
-      : '/api/admin/products';
-    const method = editingProductId ? 'PUT' : 'POST';
+    let savedId = editingProductId || Date.now();
+    let savedSlug = `prod-${savedId}`;
 
-    const res = await fetch(url, {
-      method,
-      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const parsed = await readJsonSafe<Product & { error?: string }>(res);
-    if (!parsed.isJson || !parsed.ok || !parsed.data) {
-      setErrorMessage(parsed.data?.error || 'تعذر حفظ المنتج');
-      return;
+    if (token) {
+      const url = editingProductId
+        ? `/api/admin/products/${editingProductId}`
+        : '/api/admin/products';
+      const method = editingProductId ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const parsed = await readJsonSafe<{ id?: number; slug?: string; error?: string }>(res);
+      if (!parsed.isJson || !parsed.ok || !parsed.data) {
+        setErrorMessage(parsed.data?.error || 'تعذر حفظ المنتج');
+        return;
+      }
+      if (parsed.data.id) savedId = parsed.data.id;
+      if (parsed.data.slug) savedSlug = parsed.data.slug;
+    } else if (editingProductId) {
+      const existing = products.find((item) => item.id === editingProductId);
+      if (existing?.slug) savedSlug = existing.slug;
     }
 
     if (firebaseUser) {
       try {
-        await saveFirestoreProduct(parsed.data);
-      } catch {
-        // Firestore sync error surfaced on Cloud tab if not primary admin
+        await saveFirestoreProduct({
+          id: savedId,
+          slug: savedSlug,
+          ...payload,
+        });
+      } catch (err) {
+        if (!token) {
+          setErrorMessage(err instanceof Error ? err.message : 'تعذر حفظ المنتج في السحابة');
+          return;
+        }
       }
     }
 
@@ -435,11 +540,13 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
   };
 
   const handleDeleteProduct = async (product: Product) => {
-    if (!token) return;
-    await fetch(`/api/admin/products/${product.id}`, {
-      method: 'DELETE',
-      headers: authHeaders(token),
-    });
+    if (!token && !firebaseUser) return;
+    if (token) {
+      await fetch(`/api/admin/products/${product.id}`, {
+        method: 'DELETE',
+        headers: authHeaders(token),
+      });
+    }
     if (firebaseUser) {
       try {
         await deleteFirestoreProduct(product);
@@ -477,7 +584,7 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
 
   const handleSaveLens = async (e: FormEvent) => {
     e.preventDefault();
-    if (!token) return;
+    if (!token && !firebaseUser) return;
     setErrorMessage('');
     setStatusMessage('');
 
@@ -495,25 +602,36 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       published: lPublished,
     };
 
-    const url = editingLensId ? `/api/admin/lenses/${editingLensId}` : '/api/admin/lenses';
-    const method = editingLensId ? 'PUT' : 'POST';
+    let savedId = editingLensId || Date.now();
+    if (token) {
+      const url = editingLensId ? `/api/admin/lenses/${editingLensId}` : '/api/admin/lenses';
+      const method = editingLensId ? 'PUT' : 'POST';
 
-    const res = await fetch(url, {
-      method,
-      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const parsed = await readJsonSafe<OpticalLens & { error?: string }>(res);
-    if (!parsed.isJson || !parsed.ok || !parsed.data) {
-      setErrorMessage(parsed.data?.error || 'تعذر حفظ العدسة');
-      return;
+      const res = await fetch(url, {
+        method,
+        headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const parsed = await readJsonSafe<{ id?: number; error?: string }>(res);
+      if (!parsed.isJson || !parsed.ok || !parsed.data) {
+        setErrorMessage(parsed.data?.error || 'تعذر حفظ العدسة');
+        return;
+      }
+      if (parsed.data.id) savedId = parsed.data.id;
     }
 
     if (firebaseUser) {
       try {
-        await saveFirestoreLens(parsed.data);
-      } catch {
-        // ignore if not primary admin
+        await saveFirestoreLens({
+          id: savedId,
+          ...payload,
+          sortOrder: 0,
+        });
+      } catch (err) {
+        if (!token) {
+          setErrorMessage(err instanceof Error ? err.message : 'تعذر حفظ العدسة في السحابة');
+          return;
+        }
       }
     }
 
@@ -524,11 +642,13 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
   };
 
   const handleDeleteLens = async (id: number) => {
-    if (!token) return;
-    await fetch(`/api/admin/lenses/${id}`, {
-      method: 'DELETE',
-      headers: authHeaders(token),
-    });
+    if (!token && !firebaseUser) return;
+    if (token) {
+      await fetch(`/api/admin/lenses/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders(token),
+      });
+    }
     if (firebaseUser) {
       try {
         await deleteFirestoreLens(id);
@@ -541,20 +661,76 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
   };
 
   const handleUpdateOrderStatus = async (order: OrderRecord, status: OrderStatus) => {
-    if (!token) return;
-    await fetch(`/api/admin/orders/${order.id}/status`, {
-      method: 'PATCH',
-      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    });
+    if (!token && !firebaseUser) return;
+    if (token && order.source !== 'cloud') {
+      await fetch(`/api/admin/orders/${order.id}/status`, {
+        method: 'PATCH',
+        headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+    }
     if (firebaseUser) {
       try {
-        await updateFirestoreOrderStatus(order.orderCode, status);
+        await updateFirestoreOrderStatus(order.orderCode, status, order.firestoreDocId);
       } catch {
         // ignore
       }
     }
     await loadAdminData(token);
+  };
+
+  const handleDeleteOrder = async (order: OrderRecord) => {
+    if (!token && !firebaseUser) return;
+    setErrorMessage('');
+    setStatusMessage('');
+    setDeletingOrders(true);
+    try {
+      if (token && order.source !== 'cloud') {
+        await fetch(`/api/admin/orders/${order.id}`, {
+          method: 'DELETE',
+          headers: authHeaders(token),
+        });
+      }
+      if (firebaseUser) {
+        await deleteFirestoreOrder(order.orderCode, order.firestoreDocId);
+      }
+      if (invoiceOrder?.orderCode === order.orderCode) {
+        setInvoiceOrder(null);
+      }
+      setStatusMessage(`تم حذف الطلب ${order.orderCode} نهائياً.`);
+      await loadAdminData(token);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'تعذر حذف الطلب.');
+    } finally {
+      setDeletingOrders(false);
+    }
+  };
+
+  const handleClearAllOrders = async () => {
+    if (!token && !firebaseUser) return;
+    setErrorMessage('');
+    setStatusMessage('');
+    setDeletingOrders(true);
+    try {
+      if (token) {
+        await fetch('/api/admin/orders', {
+          method: 'DELETE',
+          headers: authHeaders(token),
+        });
+      }
+      if (firebaseUser) {
+        await deleteAllFirestoreOrders();
+      }
+      setInvoiceOrder(null);
+      setConfirmClearOrders(false);
+      setOrders([]);
+      setStatusMessage('تم مسح جميع الطلبات بنجاح ويمكنك البدء الآن على نظافة.');
+      await loadAdminData(token);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'تعذر مسح جميع الطلبات.');
+    } finally {
+      setDeletingOrders(false);
+    }
   };
 
   const handleRetryExternalSync = async (orderId: number) => {
@@ -584,7 +760,7 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
 
   const handleSaveStore = async (e: FormEvent) => {
     e.preventDefault();
-    if (!token || !storeForm) return;
+    if ((!token && !firebaseUser) || !storeForm) return;
     setErrorMessage('');
     setStatusMessage('');
     const phones = phonesText
@@ -592,75 +768,93 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       .map((s) => s.trim())
       .filter(Boolean);
     const updatedStore: StoreSettings = { ...storeForm, phones };
-    const res = await fetch('/api/admin/store', {
-      method: 'PUT',
-      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedStore),
-    });
-    if (!res.ok) {
-      setErrorMessage('تعذر تحديث بيانات المتجر');
-      return;
+    if (token) {
+      const res = await fetch('/api/admin/store', {
+        method: 'PUT',
+        headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedStore),
+      });
+      if (!res.ok) {
+        setErrorMessage('تعذر تحديث بيانات المتجر');
+        return;
+      }
     }
     if (firebaseUser) {
       try {
         await saveFirestoreStoreSettings(updatedStore);
-      } catch {
-        // ignore
+      } catch (err) {
+        if (!token) {
+          setErrorMessage(err instanceof Error ? err.message : 'تعذر حفظ بيانات المتجر في السحابة');
+          return;
+        }
       }
     }
     setStatusMessage('تم حفظ بيانات المحل ولمحات القصة بنجاح.');
     onDataUpdated();
   };
 
-  if (!token) {
+  if (!token && !firebaseUser) {
     return (
       <div className="max-w-md mx-auto px-4 py-16">
-        <form
-          onSubmit={handleAuthSubmit}
-          className="bg-white rounded-2xl border border-[#141413]/12 p-6 sm:p-8 space-y-5"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#F4F1EA] flex items-center justify-center text-[#141413]">
-              <Lock className="w-5 h-5" />
+        <div className="bg-white rounded-2xl border border-[#141413]/12 p-6 sm:p-8 space-y-5">
+          <form onSubmit={handleAuthSubmit} className="space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-[#F4F1EA] flex items-center justify-center text-[#141413]">
+                <Lock className="w-5 h-5" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-[#141413]">لوحة تحكم المتجر</h1>
+                <p className="text-xs text-[#6E6B64]">
+                  {authMode === 'unclaimed'
+                    ? 'إعداد كلمة مرور الإدارة لأول مرة'
+                    : authMode === 'env'
+                      ? 'أدخل رمز الإدارة (ADMIN_TOKEN)'
+                      : 'أدخل كلمة مرور الإدارة للمتابعة'}
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-xl font-bold text-[#141413]">لوحة تحكم المتجر</h1>
-              <p className="text-xs text-[#6E6B64]">
-                {authMode === 'unclaimed'
-                  ? 'إعداد كلمة مرور الإدارة لأول مرة'
-                  : authMode === 'env'
-                    ? 'أدخل رمز الإدارة (ADMIN_TOKEN)'
-                    : 'أدخل كلمة مرور الإدارة للمتابعة'}
-              </p>
-            </div>
+
+            <label className="block text-xs font-medium text-[#141413]">
+              <span>{authMode === 'unclaimed' ? 'إنشاء كلمة مرور (6 أحرف فأكثر)' : 'كلمة المرور'}</span>
+              <input
+                type="password"
+                required
+                minLength={authMode === 'unclaimed' ? 6 : 1}
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                className="w-full mt-1.5 px-3.5 py-2.5 rounded-xl bg-[#F7F6F2] border border-[#141413]/15 text-sm"
+              />
+            </label>
+
+            {authError && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-800">
+                {authError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={authMode === 'loading'}
+              className="w-full py-3 rounded-xl bg-[#141413] text-white text-sm font-bold hover:bg-[#2B2B29]"
+            >
+              {authMode === 'unclaimed' ? 'تعيين كلمة المرور والدخول' : 'دخول للوحة التحكم'}
+            </button>
+          </form>
+
+          <div className="border-t border-[#141413]/10 pt-4 space-y-2.5">
+            <p className="text-[11px] text-[#6E6B64] text-center">
+              أو افتح لوحة التحكم السحابية مباشرة بحساب الإدارة المعتمد (مناسب للاستضافة الثابتة):
+            </p>
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              className="w-full py-2.5 px-4 rounded-xl bg-[#F4F1EA] border border-[#141413]/15 text-xs font-bold text-[#141413] hover:bg-[#EAE5DC] inline-flex items-center justify-center gap-2"
+            >
+              <Cloud className="w-4 h-4 text-[#9A7B4F]" />
+              <span>تسجيل الدخول بحساب Google (Firebase)</span>
+            </button>
           </div>
-
-          <label className="block text-xs font-medium text-[#141413]">
-            <span>{authMode === 'unclaimed' ? 'إنشاء كلمة مرور (6 أحرف فأكثر)' : 'كلمة المرور'}</span>
-            <input
-              type="password"
-              required
-              minLength={authMode === 'unclaimed' ? 6 : 1}
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              className="w-full mt-1.5 px-3.5 py-2.5 rounded-xl bg-[#F7F6F2] border border-[#141413]/15 text-sm"
-            />
-          </label>
-
-          {authError && (
-            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-800">
-              {authError}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={authMode === 'loading'}
-            className="w-full py-3 rounded-xl bg-[#141413] text-white text-sm font-bold hover:bg-[#2B2B29]"
-          >
-            {authMode === 'unclaimed' ? 'تعيين كلمة المرور والدخول' : 'دخول للوحة التحكم'}
-          </button>
-        </form>
+        </div>
       </div>
     );
   }
@@ -700,7 +894,12 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
 
           <button
             type="button"
-            onClick={() => setToken(null)}
+            onClick={() => {
+              setToken(null);
+              if (!token && firebaseUser) {
+                void signOutFirebase();
+              }
+            }}
             className="px-4 py-2 rounded-xl bg-white border border-[#141413]/15 text-xs font-medium text-[#141413] hover:bg-[#F4F1EA] inline-flex items-center gap-1.5"
           >
             <LogOut className="w-4 h-4" />
@@ -1310,6 +1509,65 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
       {/* Tab 3: Orders, Prescriptions (OD/OS ADD + IPD) & Invoices */}
       {activeTab === 'orders' && (
         <div className="space-y-6">
+          <div className="no-print flex flex-wrap items-center justify-between gap-3 bg-white rounded-2xl border border-[#141413]/10 p-4">
+            <div>
+              <div className="text-sm font-bold text-[#141413]">
+                الطلبات الواردة ({orders.length})
+              </div>
+              <div className="text-[11px] text-[#6E6B64]">
+                تظهر هنا جميع الطلبات مع صورة الشمبر المختارة، كشف النظر، والفاتورة.
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void loadAdminData(token)}
+                className="px-3.5 py-2 rounded-xl bg-[#F4F1EA] border border-[#141413]/15 text-xs font-medium text-[#141413] hover:bg-[#EAE5DC] inline-flex items-center gap-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>تحديث الطلبات</span>
+              </button>
+
+              {orders.length > 0 && !confirmClearOrders && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearOrders(true)}
+                  disabled={deletingOrders}
+                  className="px-3.5 py-2 rounded-xl bg-red-50 border border-red-200 text-xs font-bold text-red-700 hover:bg-red-100 inline-flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>مسح جميع الطلبات (بدء على نظافة)</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {confirmClearOrders && (
+            <div className="no-print p-4 rounded-2xl bg-red-50 border border-red-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <span className="font-bold text-red-900">
+                هل أنت متأكد من حذف جميع الطلبات ({orders.length}) نهائياً من الموقع ومن سحابة Firebase؟
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={deletingOrders}
+                  onClick={handleClearAllOrders}
+                  className="px-4 py-2 rounded-xl bg-red-700 text-white font-bold hover:bg-red-800 disabled:opacity-50"
+                >
+                  {deletingOrders ? 'جاري المسح...' : 'نعم، احذف جميع الطلبات'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearOrders(false)}
+                  className="px-3.5 py-2 rounded-xl bg-white border border-[#141413]/15 text-[#141413] font-medium"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          )}
+
           {invoiceOrder && (
             <div className="space-y-3">
               <div className="no-print flex items-center justify-between">
@@ -1335,7 +1593,7 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
           ) : (
             orders.map((order) => (
               <div
-                key={order.id}
+                key={`${order.orderCode}-${order.firestoreDocId || order.id}`}
                 className="no-print bg-white rounded-2xl border border-[#141413]/10 p-5 sm:p-6 space-y-4"
               >
                 <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#141413]/10 pb-3">
@@ -1347,6 +1605,11 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
                       <span className="text-xs font-mono text-[#6E6B64]">
                         ({order.invoiceNumber || `INV-${order.orderCode}`})
                       </span>
+                      {order.source === 'cloud' && (
+                        <span className="px-2 py-0.5 rounded bg-[#EBF3EE] border border-[#256D4A]/30 text-[10px] font-bold text-[#256D4A]">
+                          طلب سحابي (Firebase)
+                        </span>
+                      )}
                       {order.orderType === 'preorder' && (
                         <span className="px-2 py-0.5 rounded bg-[#F4F1EA] border border-[#9A7B4F]/40 text-[10px] font-bold text-[#9A7B4F]">
                           حجز مسبق
@@ -1379,21 +1642,23 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
                       <span>الفاتورة</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleRetryExternalSync(order.id)}
-                      title="إرسال / إعادة إرسال إلى موقع الإدارة الخارجي"
-                      className="px-3 py-1.5 rounded-lg bg-[#F7F6F2] border border-[#141413]/15 text-xs font-medium text-[#4A4843] hover:text-[#141413] inline-flex items-center gap-1"
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      <span>
-                        {order.externalSyncStatus === 'synced'
-                          ? 'مُرسل لـ Vercel'
-                          : order.externalSyncStatus === 'failed'
-                            ? 'إعادة إرسال'
-                            : 'مزامنة خارجية'}
-                      </span>
-                    </button>
+                    {token && order.source !== 'cloud' && (
+                      <button
+                        type="button"
+                        onClick={() => handleRetryExternalSync(order.id)}
+                        title="إرسال / إعادة إرسال إلى موقع الإدارة الخارجي"
+                        className="px-3 py-1.5 rounded-lg bg-[#F7F6F2] border border-[#141413]/15 text-xs font-medium text-[#4A4843] hover:text-[#141413] inline-flex items-center gap-1"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>
+                          {order.externalSyncStatus === 'synced'
+                            ? 'مُرسل لـ Vercel'
+                            : order.externalSyncStatus === 'failed'
+                              ? 'إعادة إرسال'
+                              : 'مزامنة خارجية'}
+                        </span>
+                      </button>
+                    )}
 
                     <select
                       value={order.status}
@@ -1409,22 +1674,76 @@ export function AdminPage({ onDataUpdated }: AdminPageProps) {
                         </option>
                       ))}
                     </select>
+
+                    <button
+                      type="button"
+                      disabled={deletingOrders}
+                      onClick={() => void handleDeleteOrder(order)}
+                      aria-label={`حذف الطلب ${order.orderCode}`}
+                      title="حذف هذا الطلب نهائياً"
+                      className="p-2 rounded-lg text-red-700 hover:bg-red-50 border border-red-200/70 disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 
-                {/* Items */}
-                <div className="space-y-1.5 text-xs text-[#4A4843]">
-                  {order.items.map((item) => (
-                    <div key={item.id} className="flex justify-between">
-                      <span>
-                        {item.productName} ({item.colorName})
-                        {item.lensName ? ` + عدسة: ${item.lensName}` : ''} × {item.quantity}
-                      </span>
-                      <span className="font-mono tabular-nums">
-                        {formatCurrencyEGP((item.framePrice + item.lensPrice) * item.quantity)}
-                      </span>
-                    </div>
-                  ))}
+                {/* Items with Frame Photo (صورة الشمبر) */}
+                <div className="space-y-2.5 text-xs text-[#4A4843]">
+                  {order.items.map((item) => {
+                    const frameImg = item.imageUrl || item.frameImageUrl || '';
+                    return (
+                      <div
+                        key={item.id}
+                        className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-[#F7F6F2]/70 border border-[#141413]/8"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {frameImg && (
+                            <div className="w-16 h-12 rounded-lg overflow-hidden bg-[#ECEAE3] border border-[#141413]/12 shrink-0">
+                              <SmartImage
+                                src={frameImg}
+                                alt={item.productName}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          )}
+                          <div className="space-y-0.5 min-w-0">
+                            <div className="font-bold text-[#141413] flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className="w-2.5 h-2.5 rounded-full border border-[#141413]/20 shrink-0"
+                                style={{ backgroundColor: item.colorHex || '#141413' }}
+                              />
+                              <span>
+                                {item.productName} ({item.colorName})
+                              </span>
+                              <span className="font-mono text-[#6E6B64]">× {item.quantity}</span>
+                            </div>
+                            {item.lensName && (
+                              <div className="text-[#9A7B4F] font-medium">
+                                عدسة: {item.lensName}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          {frameImg && (
+                            <a
+                              href={frameImg}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[11px] font-medium text-[#9A7B4F] underline whitespace-nowrap"
+                            >
+                              عرض صورة الشمبر
+                            </a>
+                          )}
+                          <span className="font-mono tabular-nums font-bold text-[#141413]">
+                            {formatCurrencyEGP((item.framePrice + item.lensPrice) * item.quantity)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {/* Prescription Info */}
